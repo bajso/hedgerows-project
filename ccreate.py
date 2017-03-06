@@ -16,7 +16,7 @@ def create_colours():
     # populate list and output txt
     f = open('colours.txt', 'w')
     for i in t:
-        i = '"#' + i + '"'
+        i = '#' + i
         COLOURS.append(i)
         f.write(i + ', ')
 

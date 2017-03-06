@@ -10,23 +10,29 @@ from ccreate import create_colours
 
 logger = logging.getLogger(__name__)
 
+# populate colours array with some random colours
 COLOURS = create_colours()
 
+# file and folder paths
 input_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\input_file'
 output_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file'
-input_data_name = 'input_Clip.tif'
+output_data_path_tif = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file_tif'
+input_data_name_unit16 = 'input_Clip.tif'
+input_data_name_unit8 = 'input_Clip_u.tif'
 output_data_name = 'classification.tiff'
-training_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\training_data_tif'
+training_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\training_data'
+training_data_path_tif = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\training_data_tif'
 # 'Feature_comb.tif' uses 255 as NoData values
 # 'Feature_comb_0.tif' uses 0 as NoData values
-training_data_name = 'Feature_comb_0.tif'  # uses 255 as NoData values
+training_data_name = 'Feature_comb_0.tif'
 
 
-def import_input_data():
+def import_input_data(folder_name, file_name):
+
     print '\nRead input .tif data file and import it as numpy array'
 
-    # import
-    input_data = os.path.join(input_data_path, input_data_name)
+    # import as read only
+    input_data = os.path.join(folder_name, file_name)
     try:
         input_dataset = gdal.Open(input_data, GA_ReadOnly)
     except RuntimeError:
@@ -40,7 +46,7 @@ def import_input_data():
 
     bands_data = []
     # import and stack all bands of input satellite image
-    # bands from 1 - 11
+    # bands from 1 - 7
     # RasterCount returns number of bands in a dataset
     for b in range(1, input_dataset.RasterCount + 1):
         # gets a band
@@ -51,71 +57,96 @@ def import_input_data():
     # stack array in depth, along third axis
     bands_data = np.dstack(bands_data)
     # store number of rows and columns (i.e. img resolution in pixels) and the number of bands (depth)
-    rows, cols, number_of_bands = bands_data.shape
+    rows, cols, number_of_bands = bands_data.shape  # 1000,1000,7
 
     # total number of samples or pixels
     tot_samples = rows * cols
 
     # check for pixel depth
-    str = 'Input data type: {}'.format(bands_data.dtype)
-    print str
+    print 'Input data type: {}'.format(bands_data.dtype)
 
-    return bands_data, rows, cols, number_of_bands, tot_samples
+    return bands_data, rows, cols, number_of_bands, tot_samples, geo_transform, projection
 
 
-def import_training_data():
+def import_training_data(folder_name, file_name):
     print '\nRead training .tif data file and import it as numpy array'
 
-    training_data = os.path.join(training_data_path, training_data_name)
+    training_data = os.path.join(folder_name, file_name)
     try:
         training_dataset = gdal.Open(training_data, GA_ReadOnly)
     except RuntimeError:
         print 'Cannot open desired path'
         exit(1)
 
-    # get geospatial coordinates
-    # geo_transform = input_dataset.GetGeoTransform()
-    # projection reference
-    # projection = input_dataset.GetProjectionRef()
-
     # shapefiles are constructed of a single band
     band = training_dataset.GetRasterBand(1)
-    # read
+    # read to memory
     training_pixels = band.ReadAsArray()
 
-    # feature to raster instead of gdal rasterise function
-    # when export save only non zero values
-    # could merge all shapefiles into one and then rasterise or could import all raw .shp shapefiles
+    # feature to raster instead of gdal rasterize function
+    # could merge all shapefiles into one and then rasterize or could import all raw .shp shapefiles
     # and then add all non zero pixels to same training array
 
-    s = 'Training data type: {}'.format(training_pixels.dtype)
-    print s
+    print 'Training data type: {}'.format(training_pixels.dtype)
 
     # Training data is 990x951 pixel array, 8 bit colour depth
     return training_pixels
 
 
+def write_geotiff(folder_name, file_name, data, geo_transform, projection):
+    output_data = os.path.join(folder_name, file_name)
+
+    driver = gdal.GetDriverByName('GTiff')
+    rows, cols = data.shape
+    # create an image of type unit8
+    # output is only 1 band
+    dataset = driver.Create(output_data, cols, rows, 1, gdal.GDT_Byte)
+    dataset.SetGeoTransform(geo_transform)
+    dataset.SetProjection(projection)
+    band = dataset.GetRasterBand(1)
+    band.WriteArray(data)
+
+    ct = gdal.ColorTable()
+    for pixel_value in range(1, 4):
+        color_hex = COLOURS[pixel_value]
+        # creating colours for r g and b
+        r = int(color_hex[1:3], 16)
+        g = int(color_hex[3:5], 16)
+        b = int(color_hex[5:7], 16)
+        ct.SetColorEntry(pixel_value, (r, g, b, 255))
+
+    band.SetColorTable(ct)
+
+    dataset = None  # Close the file
+    return
+
+
 if __name__ == "__main__":
 
-    input_data_attributes = import_input_data()
-    bands = input_data_attributes[0]
+    # import unit16 img
+    input_data_attributes = import_input_data(input_data_path, input_data_name_unit16)
+    # import unit8 img
+    # input_data_attributes = import_input_data(input_data_path, input_data_name_unit8)
+
+    # input img attributes
+    bands_data = input_data_attributes[0]
     rows = input_data_attributes[1]
     cols = input_data_attributes[2]
     number_of_bands = input_data_attributes[3]
     tot_samples = input_data_attributes[4]
+    geo_transform = input_data_attributes[5]
+    projection = input_data_attributes[6]
 
-    input_training_attributes = import_training_data()
+    # import training img
+    input_training_attributes = import_training_data(training_data_path_tif, training_data_name)
     # only consider labelled pixels (e.g. 1=forest, 2=field, 3=grassland) .... 0=NoData
-    train = np.nonzero(input_training_attributes)
-    # 8823 labelled pixels
-    training_labels = input_training_attributes[train]
-    training_samples = bands[train]
+    training_data = np.nonzero(input_training_attributes)
+    # 8823 labelled pixels, 941490 all pixels
 
-    # training_samples - list of pixels to be used for training
-    # pixel is a point in the 7-dimensional space of bands
-
-    # training_labels - list of class labels such that the i-th position indicates the class
-    # for i-th pixel in training_samples
+    # training_labels - list of class labels such that the i-th position indicates the class for i-th pixel in training_samples
+    training_labels = input_training_attributes[training_data]
+    # training_samples - list of pixels to be used for training, a pixel is a point in the 7-dimensional space of bands
+    training_samples = bands_data[training_data]
 
     counter = 0
     no_data = 0
@@ -138,44 +169,37 @@ if __name__ == "__main__":
     print '\nForest labels: {}\nField values: {}\nGrassland values: {}\nTotal count: {}'.format(forest, field,
                                                                                                 grassland, counter)
 
-    from datetime import datetime
-
-    start_time = datetime.now().time()
-    print 'Training...\nStart Time: '
-    print start_time
-
     ### TRAINING
+    print '\nTraining...'
     rf = RandomForestClassifier(n_estimators=100, criterion='gini', bootstrap=True,
                                 n_jobs=-1, verbose=True, oob_score=True, class_weight='balanced')
 
     rf.fit(training_samples, training_labels)
 
-    stop_time = datetime.now().time()
-    print 'Stop Time: '
-    print stop_time
-
-    start_time = datetime.now().time()
-    print '\n\nPredicting...\nStart Time: '
-    print start_time
 
     ### PREDICTING
-    flat_pixels = bands.reshape((tot_samples, number_of_bands))
+    print '\nPredicting...'
+
+    # reshape for classification input - needs to be array of pixels
+    flat_pixels = bands_data.reshape((tot_samples, number_of_bands))
     result = rf.predict(flat_pixels)
+    # reshape back into image form
     classify = result.reshape((rows, cols))
 
-    stop_time = datetime.now().time()
-    print 'Stop Time: '
-    print stop_time
+    # write to file
+    write_geotiff(output_data_path_tif, output_data_name, classify, geo_transform, projection)
+
 
     ### PLOTTING
-    print 'PLOTTTING'
+    print 'Plotting'
     from matplotlib import pyplot as plt
 
     f = plt.figure()
     f.add_subplot(1, 2, 2)
-    r = bands[:, :, 4]
-    g = bands[:, :, 3]
-    b = bands[:, :, 2]
+    # bands from 0-6
+    r = bands_data[:, :, 3]
+    g = bands_data[:, :, 2]
+    b = bands_data[:, :, 1]
     rgb = np.dstack([r, g, b])
     f.add_subplot(1, 2, 1)
     plt.imshow(rgb / 255)
