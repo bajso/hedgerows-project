@@ -1,4 +1,3 @@
-import logging
 import os
 
 import numpy as np
@@ -6,29 +5,27 @@ from gdalconst import *
 from osgeo import gdal
 from sklearn.ensemble import RandomForestClassifier
 
-from ccreate import create_colours
+# Populate colours array with some random colours
+COLOURS = '#FFA552, #F6C5AF, #5AAA95, #9A031E'
+# COLOURS =  create_colours()
 
-logger = logging.getLogger(__name__)
-
-# populate colours array with some random colours
-COLOURS = create_colours()
-
-# file and folder paths
+# Folder paths
 input_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\input_file'
 output_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file'
 output_data_path_tif = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file_tif'
-input_data_name_unit16 = 'input_Clip.tif'
-input_data_name_unit8 = 'input_Clip_u.tif'
-output_data_name = 'classification.tiff'
 training_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\training_data'
 training_data_path_tif = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\training_data_tif'
-# 'Feature_comb.tif' uses 255 as NoData values
-# 'Feature_comb_0.tif' uses 0 as NoData values
-training_data_name = 'Feature_comb_0.tif'
+
+# File paths
+input_data_name = 'input_Clip.tif'
+output_data_name = 'classification.tiff'
+
+# 'Feature_comb__1,2,3.tif' different areas of training attributes
+# All have 0 set as NoData
+training_data_name = 'Feature_comb1.tif'
 
 
 def import_input_data(folder_name, file_name):
-
     print '\nRead input .tif data file and import it as numpy array'
 
     # import as read only
@@ -64,6 +61,7 @@ def import_input_data(folder_name, file_name):
 
     # check for pixel depth
     print 'Input data type: {}'.format(bands_data.dtype)
+    input_dataset = None
 
     return bands_data, rows, cols, number_of_bands, tot_samples, geo_transform, projection
 
@@ -88,8 +86,9 @@ def import_training_data(folder_name, file_name):
     # and then add all non zero pixels to same training array
 
     print 'Training data type: {}'.format(training_pixels.dtype)
+    training_dataset = None
 
-    # Training data is 990x951 pixel array, 8 bit colour depth
+    # Training data is ~990x951 pixel array, 8 bit colour depth
     return training_pixels
 
 
@@ -109,7 +108,7 @@ def write_geotiff(folder_name, file_name, data, geo_transform, projection):
     ct = gdal.ColorTable()
     for pixel_value in range(1, 4):
         color_hex = COLOURS[pixel_value]
-        # creating colours for r g and b
+        # creating colours for r g and b, as a 16bit int
         r = int(color_hex[1:3], 16)
         g = int(color_hex[3:5], 16)
         b = int(color_hex[5:7], 16)
@@ -123,10 +122,7 @@ def write_geotiff(folder_name, file_name, data, geo_transform, projection):
 
 if __name__ == "__main__":
 
-    # import unit16 img
-    input_data_attributes = import_input_data(input_data_path, input_data_name_unit16)
-    # import unit8 img
-    # input_data_attributes = import_input_data(input_data_path, input_data_name_unit8)
+    input_data_attributes = import_input_data(input_data_path, input_data_name)
 
     # input img attributes
     bands_data = input_data_attributes[0]
@@ -139,9 +135,8 @@ if __name__ == "__main__":
 
     # import training img
     input_training_attributes = import_training_data(training_data_path_tif, training_data_name)
-    # only consider labelled pixels (e.g. 1=forest, 2=field, 3=grassland) .... 0=NoData
+    # only consider labelled pixels (e.g. 1=forest, 2=field, 3=grassland, 4=other) .... 0=NoData
     training_data = np.nonzero(input_training_attributes)
-    # 8823 labelled pixels, 941490 all pixels
 
     # training_labels - list of class labels such that the i-th position indicates the class for i-th pixel in training_samples
     training_labels = input_training_attributes[training_data]
@@ -153,6 +148,7 @@ if __name__ == "__main__":
     forest = 0
     field = 0
     grassland = 0
+    other = 0
     for i in training_labels:
         # 0 is the no-data pixel value
         if i == 0:
@@ -163,19 +159,22 @@ if __name__ == "__main__":
             field += 1
         if i == 3:
             grassland += 1
+        if i == 4:
+            other += 1
 
         counter += 1
 
-    print '\nForest labels: {}\nField values: {}\nGrassland values: {}\nTotal count: {}'.format(forest, field,
-                                                                                                grassland, counter)
+    print '\nForest labels: {}\nField values: {}\nGrassland values: {}\nOther values: {}\nTotal count: {}'.format(
+        forest, field,
+        grassland, other, counter)
 
     ### TRAINING
     print '\nTraining...'
-    rf = RandomForestClassifier(n_estimators=100, criterion='gini', bootstrap=True,
+
+    rf = RandomForestClassifier(n_estimators=200, criterion='gini', bootstrap=True, max_features='auto',
                                 n_jobs=-1, verbose=True, oob_score=True, class_weight='balanced')
 
     rf.fit(training_samples, training_labels)
-
 
     ### PREDICTING
     print '\nPredicting...'
@@ -188,25 +187,5 @@ if __name__ == "__main__":
 
     # write to file
     write_geotiff(output_data_path_tif, output_data_name, classify, geo_transform, projection)
-
-
-    ### PLOTTING
-    print 'Plotting'
-    from matplotlib import pyplot as plt
-
-    f = plt.figure()
-    f.add_subplot(1, 2, 2)
-    # bands from 0-6
-    r = bands_data[:, :, 3]
-    g = bands_data[:, :, 2]
-    b = bands_data[:, :, 1]
-    rgb = np.dstack([r, g, b])
-    f.add_subplot(1, 2, 1)
-    plt.imshow(rgb / 255)
-    f.add_subplot(1, 2, 2)
-    plt.imshow(classify)
-
-    f.savefig(os.path.join(output_data_path, 'output.png'))
-    f.show()
 
     print 'DONE'
