@@ -3,7 +3,10 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 from gdalconst import *
+from matplotlib import colors
 from osgeo import gdal
+from skimage import exposure
+from skimage.segmentation import quickshift, slic
 from sklearn import metrics
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import KFold
@@ -21,7 +24,7 @@ no_trees = 100
 no_neighbours = 10
 no_estimators = no_trees if class_s == 'rf' else no_neighbours
 features_comb = 3
-kfv_splits = 10
+kfv_splits = 2
 iteration = 0
 
 # Folder paths
@@ -31,6 +34,7 @@ output_data_path_rf = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project
 output_data_path_knn = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file\knn'
 training_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\training_data'
 validation_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file\validation'
+segmentation_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file\segmentation'
 
 # File paths
 input_data_name = 'input_Clip.tif'
@@ -254,6 +258,43 @@ def validation_plot(class_names, conf_matrix):
     plt.clf()
 
 
+def plot(img, n_seg, plt_title):
+    plt_colours = colors.ListedColormap(np.random.rand(n_seg, 3))
+    plt.imshow(img, cmap=plt_colours, interpolation='none')
+    plt.tight_layout()
+
+    path = os.path.join(segmentation_path, plt_title + '.png')
+    plt.savefig(path)
+
+    plt.clf()
+
+
+def obia(img_samples):
+    # segmentation tools work with values between 0 and 1, hence image needs to be rescaled
+    rescale_img = exposure.rescale_intensity(img_samples)
+
+    segments_quick = quickshift(rescale_img, kernel_size=7, max_dist=3, ratio=0.35, convert2lab=False)
+    n_segments_quick = len(np.unique(segments_quick))
+    print n_segments_quick
+    plot(segments_quick, n_segments_quick, 'quickshift')
+
+    # felzenszwalb segmentation cannot be used with multi-band images - see result
+
+    n_seg = [500, 1000, 4000, 8000, 10000, 15000]
+    c = [0.1, 0.05, 0.01, 0.005]
+    sig = [0, 0.25]
+    slico = False
+
+    for k in range(len(sig)):
+        for i in range(len(n_seg)):
+            for j in range(len(c)):
+                segments_slic = slic(rescale_img, n_segments=n_seg[i], compactness=c[j], max_iter=10, sigma=sig[k],
+                                     convert2lab=False, slic_zero=slico)
+                n_segments_slic = len(np.unique(segments_slic))
+                print n_segments_slic
+                plot(segments_slic, n_segments_slic, 'slic_{}_{}_{}_{}'.format(n_seg[i], c[j], sig[k], slico))
+
+
 if __name__ == "__main__":
 
     image_dataset = import_image_data(image_data_path, input_data_name)
@@ -281,6 +322,10 @@ if __name__ == "__main__":
 
     # count samples and return weights of each of the classes
     weights = count_samples(training_labels)
+
+    ### OBIA
+    obia(input_image_samples)
+
 
     ### TRAINING
     print '\nTraining...'
