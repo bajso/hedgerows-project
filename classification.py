@@ -265,34 +265,100 @@ def plot(img, n_seg, plt_title):
 
     path = os.path.join(segmentation_path, plt_title + '.png')
     plt.savefig(path)
+    print 'Fig saved in %s' % path
 
     plt.clf()
 
 
-def obia(img_samples):
+def obia(img_samples, t_dataset):
+    print '\n\nObject-Based Image Analysis\n'
+
     # segmentation tools work with values between 0 and 1, hence image needs to be rescaled
     rescale_img = exposure.rescale_intensity(img_samples)
 
-    segments_quick = quickshift(rescale_img, kernel_size=7, max_dist=3, ratio=0.35, convert2lab=False)
-    n_segments_quick = len(np.unique(segments_quick))
-    print n_segments_quick
-    plot(segments_quick, n_segments_quick, 'quickshift')
+    def quick_seg():
+        segments_data = quickshift(rescale_img, kernel_size=7, max_dist=3, ratio=0.35, convert2lab=False)
+        n_segments = len(np.unique(segments_data))
+        print n_segments
+        plot(segments_data, n_segments, 'quickshift')
 
-    # felzenszwalb segmentation cannot be used with multi-band images - see result
+        return segments_data
 
-    n_seg = [500, 1000, 4000, 8000, 10000, 15000]
-    c = [0.1, 0.05, 0.01, 0.005]
-    sig = [0, 0.25]
-    slico = False
+    def slic_seg():
 
-    for k in range(len(sig)):
-        for i in range(len(n_seg)):
-            for j in range(len(c)):
-                segments_slic = slic(rescale_img, n_segments=n_seg[i], compactness=c[j], max_iter=10, sigma=sig[k],
-                                     convert2lab=False, slic_zero=slico)
-                n_segments_slic = len(np.unique(segments_slic))
-                print n_segments_slic
-                plot(segments_slic, n_segments_slic, 'slic_{}_{}_{}_{}'.format(n_seg[i], c[j], sig[k], slico))
+        segments_data = slic(rescale_img, n_segments=12000, compactness=0.1, max_iter=10, sigma=0, convert2lab=False,
+                             slic_zero=False)
+        n_segments = len(np.unique(segments_data))
+        print n_segments
+        plot(segments_data, n_segments, 'slic')
+
+        return segments_data
+
+    seg_algo = 'slic'
+    segmentation = None
+    if seg_algo == 'quick':
+        segmentation = quick_seg()
+    else:
+        segmentation = slic_seg()
+
+    n_segments = np.unique(segmentation)
+    print 'No. of segments: %i' % len(n_segments)
+
+    # no of class labels of training data
+    labels = np.unique(t_dataset)[1:]
+    print 'No. of class labels: %i' % len(labels)
+
+    # check which segments are completely in shapefile areas
+    training_segments = {}
+    for l in labels:
+        # part of the same class if training labels and segment labels match
+        class_segments = segmentation[t_dataset == l]
+        # set builds unordered collection of unique objects - no duplication
+        training_segments[l] = set(class_segments)
+        print("Segments in class %i: %i" % (l, len(training_segments[l])))
+
+    # check if segments contain training pixels of different classes
+    # |= is set union that updates the set instead of returning a new one == update()
+    segments_union = set()
+    intersect = set()
+    training_segments_true = {}
+    for class_segments in training_segments.values():
+        # for all segments with same label check if any intersect with different labels
+        intersect.update(segments_union.intersection(class_segments))
+        segments_union.update(class_segments)
+
+    i = 1
+    for class_segments in training_segments.values():
+        # if they do, remove them from training segments array
+        training_segments_true[i] = class_segments - intersect
+        print 'Training_true: ', len(training_segments_true[i])
+        print 'Diff: ', (len(class_segments) - len(training_segments_true[i]))
+        i += 1
+
+    training_segments = None
+    training_segments = training_segments_true
+    training_segments_true = None
+
+    training_segments_img = np.copy(segmentation)
+    # threshold needs to be higher than the max number of segments - ID
+    threshold = training_segments_img.max() + 1
+    for l in labels:
+        class_label = threshold + l
+        for segment_id in training_segments[l]:
+            training_segments_img[training_segments_img == segment_id] = class_label
+    training_segments_img[training_segments_img <= threshold] = 0
+    training_segments_img[training_segments_img > threshold] -= threshold
+
+    plt.figure()
+    cm = np.array([[1, 1, 1], [1, 0, 0], [0, 1, 0], [0, 1, 1], [0, 0, 1]])
+    cmap = colors.ListedColormap(cm)
+    plt.imshow(training_segments_img, cmap=cmap)
+    plt.colorbar(ticks=[0, 1, 2, 3, 4])
+    plt.tight_layout()
+    path = os.path.join(segmentation_path, 'train_seg_img' + '.png')
+    plt.savefig(path)
+
+    print 'Fig saved in %s' % path
 
 
 if __name__ == "__main__":
@@ -323,8 +389,9 @@ if __name__ == "__main__":
     # count samples and return weights of each of the classes
     weights = count_samples(training_labels)
 
+
     ### OBIA
-    obia(input_image_samples)
+    obia(input_image_samples, training_dataset)
 
 
     ### TRAINING
