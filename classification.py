@@ -1,3 +1,4 @@
+import cPickle as pickle
 import os
 
 import matplotlib.pyplot as plt
@@ -14,8 +15,7 @@ from sklearn.model_selection import cross_val_score
 from sklearn.neighbors import KNeighborsClassifier
 
 # Populate colours array with some random colours
-COLOURS = ['test', '#F6C5AF', '#5AAA95', '#9A031E', '#000000', '#A3178F']
-# COLOURS =  create_colours()
+COLOURS = ['#FFFFFF', '#F6C5AF', '#5AAA95', '#9A031E', '#000000']
 
 # Parameters
 classifier = None
@@ -29,17 +29,20 @@ iteration = 0
 
 # Folder paths
 image_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\input_file'
-output_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file'
-output_data_path_rf = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file\rf'
-output_data_path_knn = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file\knn'
 training_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\training_data'
-validation_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file\validation'
-segmentation_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file\segmentation'
+output_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file'
+output_data_path_rf = os.path.join(output_data_path, 'rf')
+output_data_path_knn = os.path.join(output_data_path, 'knn')
+validation_path = os.path.join(output_data_path, 'validation')
+accuracy_score_path = os.path.join(validation_path, 'scores')
+segmentation_path = os.path.join(output_data_path, 'segmentation')
+segmentation_path_quickshift = os.path.join(segmentation_path, 'quickshift')
+segmentation_path_slic = os.path.join(segmentation_path, 'slic')
 
 # File paths
 input_data_name = 'input_Clip.tif'
 output_data_name = 'c_out_f{f}_{c}_{n}_i{i}.tiff'.format(f=features_comb, c=class_s, n=no_estimators, i=iteration)
-accuracy_score_name = 'accuracy_scores.txt'
+accuracy_score_name = 'accuracy_scores_{c}_{n}.txt'.format(c=class_s, n=no_estimators)
 
 # 'Feature_comb__1,2,3.tif' different areas of training attributes
 # All have 0 set as NoData
@@ -180,8 +183,8 @@ def count_samples(training_labels):
     return weights
 
 
-def write_to(data, name, file_name):
-    file_path = os.path.join(validation_path, file_name)
+def write_scores(data, name, file_name):
+    file_path = os.path.join(accuracy_score_path, file_name)
 
     if os.path.isfile(file_path) and iteration > 1:
         f = open(file_path, 'a+')  # appends in the end
@@ -225,12 +228,12 @@ def validation(classifier, test_samples, test_labels):
     data = [confusion_matrix_str, classification_report, classification_accuracy_str]
     class_acc.append(classification_accuracy)
 
-    write_to(data, 'Iteration: {}\n'.format(iteration), accuracy_score_name)
+    write_scores(data, 'Iteration: {}\n'.format(iteration), accuracy_score_name)
 
-    validation_plot(class_names, confusion_matrix)
+    confusion_matrix_plot(class_names, confusion_matrix)
 
 
-def validation_plot(class_names, conf_matrix):
+def confusion_matrix_plot(class_names, conf_matrix):
     plt_colour = plt.cm.BuPu  # blue purpleish
     plt_title = 'Confusion Matrix {c}_{n}_i{i}'.format(c=class_s, n=no_estimators, i=iteration)
     plt_tick_marks = np.arange(len(class_names))
@@ -258,57 +261,109 @@ def validation_plot(class_names, conf_matrix):
     plt.clf()
 
 
-def plot(img, n_seg, plt_title):
+def segmentation_plot(img, n_seg, file_path, plt_title):
     plt_colours = colors.ListedColormap(np.random.rand(n_seg, 3))
     plt.imshow(img, cmap=plt_colours, interpolation='none')
     plt.tight_layout()
 
-    path = os.path.join(segmentation_path, plt_title + '.png')
+    path = os.path.join(file_path, 'plots', plt_title + '.png')
     plt.savefig(path)
     print 'Fig saved in %s' % path
 
     plt.clf()
 
 
+def seg_training_data_plot(segments_data):
+    custom_colours = COLOURS
+    colour_map = colors.ListedColormap(custom_colours)
+    plt.imshow(segments_data, cmap=colour_map)
+    # for 4 different features + NoData
+    plt.colorbar(ticks=[0, 1, 2, 3, 4])
+    plt.tight_layout()
+
+    path = os.path.join(segmentation_path, 'train_seg_img' + '.png')
+    plt.savefig(path)
+    print 'Fig saved in %s' % path
+
+    plt.clf()
+
+
+def manage_result(seg_result, folder_path, file_name, write):
+    path = os.path.join(folder_path, file_name + '.pkl')
+
+    # creates empty ndarray of type int
+    seg_file = np.ndarray(shape=(1000, 1000), dtype=int)
+    if write:
+        # write results to a file
+        with open(path, 'wb') as file_out:
+            pickle.dump(seg_result, file_out, -1)
+        print '\nFile saved at: ', path
+    else:
+        # read and return results from a file
+        with open(path, 'rb') as file_in:
+            seg_file = pickle.load(file_in)
+            print 's'
+
+        print '\nFile loaded'
+
+    return seg_file
+
+
 def obia(img_samples, t_dataset):
     print '\n\nObject-Based Image Analysis\n'
 
-    # segmentation tools work with values between 0 and 1, hence image needs to be rescaled
-    rescale_img = exposure.rescale_intensity(img_samples)
-
     def quick_seg():
-        segments_data = quickshift(rescale_img, kernel_size=7, max_dist=3, ratio=0.35, convert2lab=False)
+        k_size = 7
+        max_d = 3
+        ratio = 0.35
+        segments_data = quickshift(rescale_img, kernel_size=k_size, max_dist=max_d, ratio=ratio, convert2lab=False)
         n_segments = len(np.unique(segments_data))
-        print n_segments
-        plot(segments_data, n_segments, 'quickshift')
+
+        # plot results
+        name = 'quick_k{k}_d{d}_r{r}'.format(k=k_size, d=max_d, r=ratio)
+        segmentation_plot(segments_data, n_segments, segmentation_path_quickshift, name)
+        # store segments
+        manage_result(segments_data, segmentation_path_quickshift, 'segments_' + name, True)
 
         return segments_data
 
     def slic_seg():
-
-        segments_data = slic(rescale_img, n_segments=12000, compactness=0.1, max_iter=10, sigma=0, convert2lab=False,
+        n_seg = 8000
+        segments_data = slic(rescale_img, n_segments=n_seg, compactness=0.1, max_iter=10, sigma=0, convert2lab=False,
                              slic_zero=False)
         n_segments = len(np.unique(segments_data))
-        print n_segments
-        plot(segments_data, n_segments, 'slic')
+
+        # plot results
+        name = 'slic_n{n}'.format(n=n_seg)
+        segmentation_plot(segments_data, n_segments, segmentation_path_slic, name)
+        # store segments
+        manage_result(segments_data, segmentation_path_slic, 'segments_' + name, True)
 
         return segments_data
 
-    seg_algo = 'slic'
+    # segmentation tools work with values between 0 and 1, hence image needs to be rescaled
+    rescale_img = exposure.rescale_intensity(img_samples)
+
+    # either load existing segments or create new ones
+    load_segments = False
+    seg_algo = 'quick'
     segmentation = None
-    if seg_algo == 'quick':
-        segmentation = quick_seg()
+    if load_segments:
+        segmentation = manage_result(None, segmentation_path_quickshift, 'segments_slic_n8000', False)
     else:
-        segmentation = slic_seg()
+        if seg_algo == 'quick':
+            segmentation = quick_seg()
+        else:
+            segmentation = slic_seg()
 
     n_segments = np.unique(segmentation)
     print 'No. of segments: %i' % len(n_segments)
 
-    # no of class labels of training data
+    # no of class labels of training data, 0 is marked as NoData
     labels = np.unique(t_dataset)[1:]
     print 'No. of class labels: %i' % len(labels)
 
-    # check which segments are completely in shapefile areas
+    # check which segments are in shapefile areas
     training_segments = {}
     for l in labels:
         # part of the same class if training labels and segment labels match
@@ -327,38 +382,35 @@ def obia(img_samples, t_dataset):
         intersect.update(segments_union.intersection(class_segments))
         segments_union.update(class_segments)
 
+    # if they do, remove them from training segments array
     i = 1
     for class_segments in training_segments.values():
-        # if they do, remove them from training segments array
         training_segments_true[i] = class_segments - intersect
         print 'Training_true: ', len(training_segments_true[i])
         print 'Diff: ', (len(class_segments) - len(training_segments_true[i]))
         i += 1
 
+    # assign back to the old name
     training_segments = None
     training_segments = training_segments_true
     training_segments_true = None
 
+    # label non-training segments with 0
     training_segments_img = np.copy(segmentation)
-    # threshold needs to be higher than the max number of segments - ID
+    # threshold needs to be higher than the max number of segments
     threshold = training_segments_img.max() + 1
     for l in labels:
         class_label = threshold + l
-        for segment_id in training_segments[l]:
-            training_segments_img[training_segments_img == segment_id] = class_label
+        for segment_label in training_segments[l]:
+            # if a segment's number matches training segment's number then mark it with a label
+            training_segments_img[training_segments_img == segment_label] = class_label
+    # all segments that do no appear in marked training areas are labelled as 0
     training_segments_img[training_segments_img <= threshold] = 0
+    # rest are marked with class labels, e.g 1-forest, 2-field, etc. by subtracting the threshold value
     training_segments_img[training_segments_img > threshold] -= threshold
 
-    plt.figure()
-    cm = np.array([[1, 1, 1], [1, 0, 0], [0, 1, 0], [0, 1, 1], [0, 0, 1]])
-    cmap = colors.ListedColormap(cm)
-    plt.imshow(training_segments_img, cmap=cmap)
-    plt.colorbar(ticks=[0, 1, 2, 3, 4])
-    plt.tight_layout()
-    path = os.path.join(segmentation_path, 'train_seg_img' + '.png')
-    plt.savefig(path)
-
-    print 'Fig saved in %s' % path
+    # plot training segments
+    seg_training_data_plot(training_segments_img)
 
 
 if __name__ == "__main__":
@@ -450,6 +502,6 @@ if __name__ == "__main__":
         write_s.append('{0:10f} {1:10f}'.format(cvs[i], class_acc[i]))
         print write_s[i]
 
-    write_to(write_s, '\nCross Validation Scores / Classification Accuracy Scores\n', accuracy_score_name)
+    write_scores(write_s, '\nCross Validation Scores / Classification Accuracy Scores\n', accuracy_score_name)
 
     print '\nDONE'
