@@ -80,15 +80,12 @@ def import_image_data(folder_name, file_name):
     # store number of rows and columns (i.e. img resolution in pixels) and the number of bands (depth)
     rows, cols, number_of_bands = bands.shape  # 1000,1000,7
 
-    # total number of samples or pixels
-    tot_samples = rows * cols
-
     # check for pixel depth
     print 'Input data type: {}'.format(bands.dtype)
     # close dataset
     image_data = None
 
-    return bands, rows, cols, number_of_bands, tot_samples, geo_transform, projection
+    return bands, rows, cols, number_of_bands, geo_transform, projection
 
 
 def import_training_data(folder_name, file_name):
@@ -130,18 +127,30 @@ def write_geotiff(folder_name, file_name, data, geo_transform, projection):
     output_data.SetGeoTransform(geo_transform)
     output_data.SetProjection(projection)
     band = output_data.GetRasterBand(1)
-    band.WriteArray(data)
 
+    # list of colours
+    custom_colours = COLOURS
+    # create a colour table
     colour_table = gdal.ColorTable()
-    for label_colour in range(1, 6):
-        color_hex = COLOURS[label_colour]
-        # creating colours for r g and b, as a 16bit int
-        r = int(color_hex[1:3], 16)
-        g = int(color_hex[3:5], 16)
-        b = int(color_hex[5:7], 16)
-        colour_table.SetColorEntry(label_colour, (r, g, b, 255))
+    # add colours to the table
+    # start from the second colour on the list, first is plain white
+    for n in range(1, len(custom_colours)):
+        # convert from hex to rgb values
+        colour_entry = colors.hex2color(custom_colours[n])
+        # convert to 0-255 colour range
+        colour_entry = [int(255 * x) for x in colour_entry]
+        r = colour_entry[0]
+        g = colour_entry[1]
+        b = colour_entry[2]
+        a = 255  # alpha or blackband
+        print colour_entry
+        # store in colour table
+        colour_table.SetColorEntry(n, (r, g, b, a))
 
     band.SetColorTable(colour_table)
+
+    # write the image
+    band.WriteArray(data)
 
     # Close the file
     output_data = None
@@ -262,8 +271,10 @@ def confusion_matrix_plot(class_names, conf_matrix):
 
 
 def segmentation_plot(img, n_seg, file_path, plt_title):
+    # create random colours for all segments
     plt_colours = colors.ListedColormap(np.random.rand(n_seg, 3))
     plt.imshow(img, cmap=plt_colours, interpolation='none')
+    # to fit properly with all labels
     plt.tight_layout()
 
     path = os.path.join(file_path, 'plots', plt_title + '.png')
@@ -274,6 +285,7 @@ def segmentation_plot(img, n_seg, file_path, plt_title):
 
 
 def seg_training_data_plot(segments_data):
+    # use predefined colours
     custom_colours = COLOURS
     colour_map = colors.ListedColormap(custom_colours)
     plt.imshow(segments_data, cmap=colour_map)
@@ -313,8 +325,8 @@ def obia(img_samples, t_dataset):
     print '\n\nObject-Based Image Analysis\n'
 
     def quick_seg():
-        k_size = 7
-        max_d = 3
+        k_size = 5
+        max_d = 2
         ratio = 0.35
         segments_data = quickshift(rescale_img, kernel_size=k_size, max_dist=max_d, ratio=ratio, convert2lab=False)
         n_segments = len(np.unique(segments_data))
@@ -345,11 +357,11 @@ def obia(img_samples, t_dataset):
     rescale_img = exposure.rescale_intensity(img_samples)
 
     # either load existing segments or create new ones
-    load_segments = False
+    load_segments = True
     seg_algo = 'quick'
     segmentation = None
     if load_segments:
-        segmentation = manage_result(None, segmentation_path_quickshift, 'segments_slic_n8000', False)
+        segmentation = manage_result(None, segmentation_path_quickshift, 'segments_quick_k7_d3_r0.35', False)
     else:
         if seg_algo == 'quick':
             segmentation = quick_seg()
@@ -370,6 +382,7 @@ def obia(img_samples, t_dataset):
         class_segments = segmentation[t_dataset == l]
         # set builds unordered collection of unique objects - no duplication
         training_segments[l] = set(class_segments)
+        ### BEFORE SUBMIT DETELE PRINT STATEMENT
         print("Segments in class %i: %i" % (l, len(training_segments[l])))
 
     # check if segments contain training pixels of different classes
@@ -396,21 +409,23 @@ def obia(img_samples, t_dataset):
     training_segments_true = None
 
     # label non-training segments with 0
-    training_segments_img = np.copy(segmentation)
+    # create a copy only for plotting purposes
+    seg_img = np.copy(segmentation)
     # threshold needs to be higher than the max number of segments
-    threshold = training_segments_img.max() + 1
+    t = len(n_segments)
     for l in labels:
-        class_label = threshold + l
+        class_label = t + l
+        # label all segments that match with class label
         for segment_label in training_segments[l]:
-            # if a segment's number matches training segment's number then mark it with a label
-            training_segments_img[training_segments_img == segment_label] = class_label
+            seg_img[seg_img == segment_label] = class_label
+
     # all segments that do no appear in marked training areas are labelled as 0
-    training_segments_img[training_segments_img <= threshold] = 0
+    seg_img[seg_img <= t] = 0
     # rest are marked with class labels, e.g 1-forest, 2-field, etc. by subtracting the threshold value
-    training_segments_img[training_segments_img > threshold] -= threshold
+    seg_img[seg_img > t] -= t
 
     # plot training segments
-    seg_training_data_plot(training_segments_img)
+    seg_training_data_plot(seg_img)
 
 
 if __name__ == "__main__":
@@ -422,9 +437,8 @@ if __name__ == "__main__":
     rows = image_dataset[1]
     cols = image_dataset[2]
     number_of_bands = image_dataset[3]
-    tot_samples = image_dataset[4]
-    geo_transform = image_dataset[5]
-    projection = image_dataset[6]
+    geo_transform = image_dataset[4]
+    projection = image_dataset[5]
 
     # training attributes
     training_dataset = import_training_data(training_data_path, training_data_name)
@@ -447,8 +461,6 @@ if __name__ == "__main__":
 
 
     ### TRAINING
-    print '\nTraining...'
-
     rf = RandomForestClassifier(n_estimators=no_estimators, criterion='gini', bootstrap=True, max_features='auto',
                                 n_jobs=-1, verbose=True, oob_score=True, class_weight='balanced')
 
@@ -466,8 +478,9 @@ if __name__ == "__main__":
     # K-fold cross validation - splits in 10 equal chunks (16056/10 = 1606)
     kf = KFold(n_splits=kfv_splits)
     cvs = cross_val_score(classifier, training_samples, training_labels, cv=kf, n_jobs=-1, pre_dispatch='2*n_jobs')
-    print '\nCross val score: {}\n'.format(cvs)
+    print '\nCross val score: {}'.format(cvs)
 
+    print '\nTraining...'
     class_acc = []
     for train, test in kf.split(training_samples):
         iteration += 1
@@ -484,6 +497,8 @@ if __name__ == "__main__":
         ### PREDICTING
         print '\nPredicting...'
 
+        # total number of samples or pixels in an image (1000*1000)
+        tot_samples = rows * cols
         # reshape for classification input - needs to be array of pixels
         flat_pixels = input_image_samples.reshape((tot_samples, number_of_bands))
         result = classifier.predict(flat_pixels)
