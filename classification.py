@@ -3,6 +3,7 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
+import scipy as sp
 from gdalconst import *
 from matplotlib import colors
 from osgeo import gdal
@@ -14,7 +15,6 @@ from sklearn.model_selection import KFold
 from sklearn.model_selection import cross_val_score
 from sklearn.neighbors import KNeighborsClassifier
 
-# Populate colours array with some random colours
 COLOURS = ['#FFFFFF', '#F6C5AF', '#5AAA95', '#9A031E', '#000000']
 
 # Parameters
@@ -62,7 +62,7 @@ def import_image_data(folder_name, file_name):
 
     # get geospatial coordinates
     geo_transform = image_data.GetGeoTransform()
-    # projection reference
+    # projection reference - display img from a sphere - Earth to flat 2D screen, usually Mercator projection - check ArcMap Img Properties for more info
     projection = image_data.GetProjectionRef()
 
     bands = []
@@ -270,37 +270,7 @@ def confusion_matrix_plot(class_names, conf_matrix):
     plt.clf()
 
 
-def segmentation_plot(img, n_seg, file_path, plt_title):
-    # create random colours for all segments
-    plt_colours = colors.ListedColormap(np.random.rand(n_seg, 3))
-    plt.imshow(img, cmap=plt_colours, interpolation='none')
-    # to fit properly with all labels
-    plt.tight_layout()
-
-    path = os.path.join(file_path, 'plots', plt_title + '.png')
-    plt.savefig(path)
-    print 'Fig saved in %s' % path
-
-    plt.clf()
-
-
-def seg_training_data_plot(segments_data):
-    # use predefined colours
-    custom_colours = COLOURS
-    colour_map = colors.ListedColormap(custom_colours)
-    plt.imshow(segments_data, cmap=colour_map)
-    # for 4 different features + NoData
-    plt.colorbar(ticks=[0, 1, 2, 3, 4])
-    plt.tight_layout()
-
-    path = os.path.join(segmentation_path, 'train_seg_img' + '.png')
-    plt.savefig(path)
-    print 'Fig saved in %s' % path
-
-    plt.clf()
-
-
-def manage_result(seg_result, folder_path, file_name, write):
+def save_or_load_segments(seg_result, folder_path, file_name, write):
     path = os.path.join(folder_path, file_name + '.pkl')
 
     # creates empty ndarray of type int
@@ -314,44 +284,150 @@ def manage_result(seg_result, folder_path, file_name, write):
         # read and return results from a file
         with open(path, 'rb') as file_in:
             seg_file = pickle.load(file_in)
-            print 's'
-
         print '\nFile loaded'
 
     return seg_file
 
 
+def save_or_load_objects(obj, folder_path, file_name, write):
+    path = os.path.join(folder_path, file_name + '.pkl')
+
+    objects_file = None
+    if write:
+        # write results to a file
+        with open(path, 'wb') as file_out:
+            pickle.dump(obj, file_out, -1)
+        print '\nFile saved at: ', path
+    else:
+        # read and return results from a file
+        with open(path, 'rb') as file_in:
+            objects_file = pickle.load(file_in)
+        print '\nFile loaded'
+
+    return objects_file
+
+
 def obia(img_samples, t_dataset):
     print '\n\nObject-Based Image Analysis\n'
 
-    def quick_seg():
+    def quick_seg(image):
         k_size = 5
         max_d = 2
         ratio = 0.35
-        segments_data = quickshift(rescale_img, kernel_size=k_size, max_dist=max_d, ratio=ratio, convert2lab=False)
+        segments_data = quickshift(image, kernel_size=k_size, max_dist=max_d, ratio=ratio, convert2lab=False)
         n_segments = len(np.unique(segments_data))
 
         # plot results
         name = 'quick_k{k}_d{d}_r{r}'.format(k=k_size, d=max_d, r=ratio)
-        segmentation_plot(segments_data, n_segments, segmentation_path_quickshift, name)
+        input_seg_plot(segments_data, n_segments, segmentation_path_quickshift, name)
         # store segments
-        manage_result(segments_data, segmentation_path_quickshift, 'segments_' + name, True)
+        save_or_load_segments(segments_data, segmentation_path_quickshift, 'segments_' + name, True)
 
         return segments_data
 
-    def slic_seg():
+    def slic_seg(image):
         n_seg = 8000
-        segments_data = slic(rescale_img, n_segments=n_seg, compactness=0.1, max_iter=10, sigma=0, convert2lab=False,
+        segments_data = slic(image, n_segments=n_seg, compactness=0.1, max_iter=10, sigma=0, convert2lab=False,
                              slic_zero=False)
         n_segments = len(np.unique(segments_data))
 
         # plot results
         name = 'slic_n{n}'.format(n=n_seg)
-        segmentation_plot(segments_data, n_segments, segmentation_path_slic, name)
+        input_seg_plot(segments_data, n_segments, segmentation_path_slic, name)
         # store segments
-        manage_result(segments_data, segmentation_path_slic, 'segments_' + name, True)
+        save_or_load_segments(segments_data, segmentation_path_slic, 'segments_' + name, True)
 
         return segments_data
+
+    def training_segments_plot():
+
+        def plot(segments_data):
+            # use predefined colours
+            custom_colours = COLOURS
+            colour_map = colors.ListedColormap(custom_colours)
+            plt.imshow(segments_data, cmap=colour_map)
+            # for 4 different features + NoData
+            plt.colorbar(ticks=[0, 1, 2, 3, 4])
+            plt.tight_layout()
+
+            path = os.path.join(segmentation_path, 'train_seg_img' + '.png')
+            plt.savefig(path)
+            print 'Fig saved in %s' % path
+
+            plt.clf()
+
+        # label non-training segments with 0
+        # create a copy only for plotting purposes
+        seg_img = np.copy(segmentation)
+        # threshold needs to be higher than the max number of segments
+        t = len(n_segments)
+        for l in labels:
+            class_label = t + l
+            # label all segments that match with class label
+            for segment_label in training_segments[l]:
+                seg_img[seg_img == segment_label] = class_label
+
+        # all segments that do no appear in marked training areas are labelled as 0
+        seg_img[seg_img <= t] = 0
+        # rest are marked with class labels, e.g 1-forest, 2-field, etc. by subtracting the threshold value
+        seg_img[seg_img > t] -= t
+
+        # plot training segments
+        plot(seg_img)
+
+    def input_seg_plot(img, n_seg, file_path, plt_title):
+        # create random colours for all segments
+        plt_colours = colors.ListedColormap(np.random.rand(n_seg, 3))
+        plt.imshow(img, cmap=plt_colours, interpolation='none')
+        # to fit properly with all labels
+        plt.tight_layout()
+
+        path = os.path.join(file_path, 'plots', plt_title + '.png')
+        plt.savefig(path)
+        print 'Fig saved in %s' % path
+
+        plt.clf()
+
+    def compute_statistics(s_pixels):
+        # Compute statistics for each Band
+        # min, max, mean, variance, skewness, kurtosis
+        attributes = []
+        number_of_pixels, number_of_bands = s_pixels.shape
+
+        for band in range(number_of_bands):
+            statistics = sp.stats.describe(s_pixels[:, band])
+            # min and max is a tuple
+            b_stats = list(statistics[1])
+            # add them all together
+            b_stats += list(statistics[2:])
+            # check if any attribute is NaN due to division with neg values
+            i = 0
+            for s in b_stats:
+                if np.isnan(s):
+                    # replace with zero
+                    b_stats[i] = float(0)
+                i += 1
+
+            attributes += b_stats
+
+        return attributes
+
+    def create_objects():
+        objects = []
+        object_labels = []
+        for s in n_segments:
+            segments = rescale_img[segmentation == s]
+            # compute statistics for each object
+            objects.append(compute_statistics(segments))
+            # assign a class label to each object
+            object_labels.append(s)
+
+        save_or_load_objects(objects, segmentation_path, 'objects', True)
+        save_or_load_objects(object_labels, segmentation_path, 'object_labels', True)
+
+        print("Created %i objects" % len(objects))
+
+        return objects, object_labels
 
     # segmentation tools work with values between 0 and 1, hence image needs to be rescaled
     rescale_img = exposure.rescale_intensity(img_samples)
@@ -361,13 +437,12 @@ def obia(img_samples, t_dataset):
     seg_algo = 'quick'
     segmentation = None
     if load_segments:
-        segmentation = manage_result(None, segmentation_path_quickshift, 'segments_quick_k7_d3_r0.35', False)
+        segmentation = save_or_load_segments(None, segmentation_path_quickshift, 'segments_quick_k7_d3_r0.35', False)
     else:
         if seg_algo == 'quick':
-            segmentation = quick_seg()
+            segmentation = quick_seg(rescale_img)
         else:
-            segmentation = slic_seg()
-
+            segmentation = slic_seg(rescale_img)
     n_segments = np.unique(segmentation)
     print 'No. of segments: %i' % len(n_segments)
 
@@ -408,24 +483,20 @@ def obia(img_samples, t_dataset):
     training_segments = training_segments_true
     training_segments_true = None
 
-    # label non-training segments with 0
-    # create a copy only for plotting purposes
-    seg_img = np.copy(segmentation)
-    # threshold needs to be higher than the max number of segments
-    t = len(n_segments)
-    for l in labels:
-        class_label = t + l
-        # label all segments that match with class label
-        for segment_label in training_segments[l]:
-            seg_img[seg_img == segment_label] = class_label
+    # create and plot training segments
+    training_segments_plot()
 
-    # all segments that do no appear in marked training areas are labelled as 0
-    seg_img[seg_img <= t] = 0
-    # rest are marked with class labels, e.g 1-forest, 2-field, etc. by subtracting the threshold value
-    seg_img[seg_img > t] -= t
+    # create objects / training data
+    load_objects = True
+    objects = None
+    object_labels = None
+    if load_objects:
+        objects = save_or_load_objects(objects, segmentation_path, 'objects', False)
+        object_labels = save_or_load_objects(object_labels, segmentation_path, 'object_labels', False)
+    else:
+        objects, object_labels = create_objects()
 
-    # plot training segments
-    seg_training_data_plot(seg_img)
+    print 'Done'
 
 
 if __name__ == "__main__":
@@ -455,16 +526,14 @@ if __name__ == "__main__":
     # count samples and return weights of each of the classes
     weights = count_samples(training_labels)
 
-
     ### OBIA
     obia(input_image_samples, training_dataset)
-
 
     ### TRAINING
     rf = RandomForestClassifier(n_estimators=no_estimators, criterion='gini', bootstrap=True, max_features='auto',
                                 n_jobs=-1, verbose=True, oob_score=True, class_weight='balanced')
 
-    knn = KNeighborsClassifier(n_neighbors=no_estimators, weights='uniform', algorithm='auto', metric='minkowski',
+    knn = KNeighborsClassifier(n_neighbors=no_estimators, weights='distance', algorithm='auto', metric='minkowski',
                                n_jobs=-1)
 
     if class_s == 'rf':
