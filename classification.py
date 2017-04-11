@@ -19,15 +19,23 @@ COLOURS = ['#FFFFFF', '#F6C5AF', '#5AAA95', '#9A031E', '#000000']
 
 # Parameters
 classifier = None
-class_s = 'rf'  # for naming purposes
+class_s = 'knn'  # for naming purposes
+load_segments = True
+load_objects = True
+seg_algo = 'quick'
+do_obia = False
+cross_validate = True
+iteration = 0
+
 no_trees = 100
 no_neighbours = 10
 no_estimators = no_trees if class_s == 'rf' else no_neighbours
 features_comb = 3
 kfv_splits = 2
-iteration = 0
 
 # Folder paths
+OUTPUT_PATH = ''
+
 image_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\input_file'
 training_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\training_data'
 output_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file'
@@ -117,6 +125,9 @@ def import_training_data(folder_name, file_name):
 
 def write_geotiff(folder_name, file_name, data, geo_transform, projection):
     path = os.path.join(folder_name, file_name)
+    if not os.path.exists(folder_name):
+        os.makedirs(folder_name)
+
     print 'Saving as: \'{}\''.format(file_name)
 
     driver = gdal.GetDriverByName('GTiff')
@@ -156,49 +167,15 @@ def write_geotiff(folder_name, file_name, data, geo_transform, projection):
     output_data = None
 
 
-def count_samples(training_labels):
-    counter = 0
-
-    no_data = 0
-    forest = 0
-    field = 0
-    grassland = 0
-    other = 0
-    hedgerow = 0
-    for l in training_labels:
-        # 0 is the no-data pixel value
-        if l == 0:
-            no_data += 1
-        if l == 1:
-            forest += 1
-        if l == 2:
-            field += 1
-        if l == 3:
-            grassland += 1
-        if l == 4:
-            other += 1
-        if l == 5:
-            hedgerow += 1
-
-        counter += 1
-
-    print '\nForest labels: {fo}\nField values: {fi}\nGrassland values: {g}\nHedgerow values: {h}\nOther values: {o}\nTotal count: {tot}'.format(
-        fo=forest, fi=field, g=grassland, h=hedgerow, o=other, tot=counter)
-
-    # weight normalization = 'balanced setting'
-    weights = {1: forest / float(counter), 2: field / float(counter), 3: grassland / float(counter),
-               4: other / float(counter)}
-
-    return weights
-
-
 def write_scores(data, name, file_name):
-    file_path = os.path.join(accuracy_score_path, file_name)
+    path = os.path.join(accuracy_score_path, file_name)
+    if not os.path.exists(accuracy_score_path):
+        os.makedirs(accuracy_score_path)
 
-    if os.path.isfile(file_path) and iteration > 1:
-        f = open(file_path, 'a+')  # appends in the end
+    if os.path.isfile(path) and iteration > 1:
+        f = open(path, 'a+')  # appends in the end
     else:
-        f = open(file_path, 'w+')  # creates the file
+        f = open(path, 'w+')  # creates the file
 
     f.write(name + '\n')
     for s in data:
@@ -209,17 +186,11 @@ def write_scores(data, name, file_name):
     f.close()
 
 
-def validation(classifier, test_samples, test_labels):
+def validation(classifier, test_samples, test_labels, class_acc):
     class_names = ['Forest', 'Field', 'Grassland', 'Other']
 
     # predicts only the test data for comparison against test labels
     predicted_labels = classifier.predict(test_samples)
-
-    # verification_pixels = input_training_attributes
-    # for_verification = training_data
-    # verification_labels = verification_pixels[for_verification]
-    # predicted_labels = classify[for_verification]
-
 
     confusion_matrix = metrics.confusion_matrix(test_labels, predicted_labels)
     confusion_matrix_str = "Confusion matrix:\n\n{}\n".format(confusion_matrix)
@@ -239,10 +210,10 @@ def validation(classifier, test_samples, test_labels):
 
     write_scores(data, 'Iteration: {}\n'.format(iteration), accuracy_score_name)
 
-    confusion_matrix_plot(class_names, confusion_matrix)
+    plot_confusion_matrix(class_names, confusion_matrix)
 
 
-def confusion_matrix_plot(class_names, conf_matrix):
+def plot_confusion_matrix(class_names, conf_matrix):
     plt_colour = plt.cm.BuPu  # blue purpleish
     plt_title = 'Confusion Matrix {c}_{n}_i{i}'.format(c=class_s, n=no_estimators, i=iteration)
     plt_tick_marks = np.arange(len(class_names))
@@ -265,13 +236,17 @@ def confusion_matrix_plot(class_names, conf_matrix):
     plt.tight_layout()
 
     path = os.path.join(validation_path, plt_title + '.png')
-    plt.savefig(path)
+    if not os.path.exists(validation_path):
+        os.makedirs(validation_path)
 
+    plt.savefig(path)
     plt.clf()
 
 
-def save_or_load_segments(seg_result, folder_path, file_name, write):
+def save_load_segments(img, seg_result, folder_path, file_name, write):
     path = os.path.join(folder_path, file_name + '.pkl')
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
 
     # creates empty ndarray of type int
     seg_file = np.ndarray(shape=(1000, 1000), dtype=int)
@@ -281,6 +256,12 @@ def save_or_load_segments(seg_result, folder_path, file_name, write):
             pickle.dump(seg_result, file_out, -1)
         print '\nFile saved at: ', path
     else:
+        # check if the result exists
+        if not os.path.isfile(path):
+            # run the segmentation if it does not
+            seg_file = perform_segmentation(img)
+            return seg_file
+
         # read and return results from a file
         with open(path, 'rb') as file_in:
             seg_file = pickle.load(file_in)
@@ -289,8 +270,10 @@ def save_or_load_segments(seg_result, folder_path, file_name, write):
     return seg_file
 
 
-def save_or_load_objects(obj, folder_path, file_name, write):
+def save_load_objects(img, segments, obj, folder_path, file_name, write):
     path = os.path.join(folder_path, file_name + '.pkl')
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
 
     objects_file = None
     if write:
@@ -299,6 +282,12 @@ def save_or_load_objects(obj, folder_path, file_name, write):
             pickle.dump(obj, file_out, -1)
         print '\nFile saved at: ', path
     else:
+        # check if the result exists
+        if not os.path.isfile(path):
+            # create objects if it does not
+            objects_file = create_objects(img, segments)
+            return objects_file[1]  # returns only object samples
+
         # read and return results from a file
         with open(path, 'rb') as file_in:
             objects_file = pickle.load(file_in)
@@ -307,74 +296,7 @@ def save_or_load_objects(obj, folder_path, file_name, write):
     return objects_file
 
 
-def obia(img_samples, t_dataset):
-    print '\n\nObject-Based Image Analysis\n'
-
-    def quick_seg(image):
-        k_size = 5
-        max_d = 2
-        ratio = 0.35
-        segments_data = quickshift(image, kernel_size=k_size, max_dist=max_d, ratio=ratio, convert2lab=False)
-        n_segments = len(np.unique(segments_data))
-
-        # plot results
-        name = 'quick_k{k}_d{d}_r{r}'.format(k=k_size, d=max_d, r=ratio)
-        input_seg_plot(segments_data, n_segments, segmentation_path_quickshift, name)
-        # store segments
-        save_or_load_segments(segments_data, segmentation_path_quickshift, 'segments_' + name, True)
-
-        return segments_data
-
-    def slic_seg(image):
-        n_seg = 8000
-        segments_data = slic(image, n_segments=n_seg, compactness=0.1, max_iter=10, sigma=0, convert2lab=False,
-                             slic_zero=False)
-        n_segments = len(np.unique(segments_data))
-
-        # plot results
-        name = 'slic_n{n}'.format(n=n_seg)
-        input_seg_plot(segments_data, n_segments, segmentation_path_slic, name)
-        # store segments
-        save_or_load_segments(segments_data, segmentation_path_slic, 'segments_' + name, True)
-
-        return segments_data
-
-    def training_segments_plot():
-
-        def plot(segments_data):
-            # use predefined colours
-            custom_colours = COLOURS
-            colour_map = colors.ListedColormap(custom_colours)
-            plt.imshow(segments_data, cmap=colour_map)
-            # for 4 different features + NoData
-            plt.colorbar(ticks=[0, 1, 2, 3, 4])
-            plt.tight_layout()
-
-            path = os.path.join(segmentation_path, 'train_seg_img' + '.png')
-            plt.savefig(path)
-            print 'Fig saved in %s' % path
-
-            plt.clf()
-
-        # label non-training segments with 0
-        # create a copy only for plotting purposes
-        seg_img = np.copy(segmentation)
-        # threshold needs to be higher than the max number of segments
-        t = len(n_segments)
-        for l in labels:
-            class_label = t + l
-            # label all segments that match with class label
-            for segment_label in training_segments[l]:
-                seg_img[seg_img == segment_label] = class_label
-
-        # all segments that do no appear in marked training areas are labelled as 0
-        seg_img[seg_img <= t] = 0
-        # rest are marked with class labels, e.g 1-forest, 2-field, etc. by subtracting the threshold value
-        seg_img[seg_img > t] -= t
-
-        # plot training segments
-        plot(seg_img)
-
+def perform_segmentation(scaled_image):
     def input_seg_plot(img, n_seg, file_path, plt_title):
         # create random colours for all segments
         plt_colours = colors.ListedColormap(np.random.rand(n_seg, 3))
@@ -383,11 +305,52 @@ def obia(img_samples, t_dataset):
         plt.tight_layout()
 
         path = os.path.join(file_path, 'plots', plt_title + '.png')
+        if not os.path.exists(file_path):
+            os.makedirs(file_path)
+
         plt.savefig(path)
         print 'Fig saved in %s' % path
 
         plt.clf()
 
+    def quick_seg(img):
+        k_size = 7
+        max_d = 2
+        ratio = 0.35
+        segments_data = quickshift(img, kernel_size=k_size, max_dist=max_d, ratio=ratio, convert2lab=False)
+        n_segments = len(np.unique(segments_data))
+
+        # plot results
+        name = 'quick_k{k}_d{d}_r{r}'.format(k=k_size, d=max_d, r=ratio)
+        input_seg_plot(segments_data, n_segments, segmentation_path_quickshift, name)
+        # store segments
+        save_load_segments(None, segments_data, segmentation_path_quickshift, 'segments_' + name, True)
+
+        return segments_data
+
+    def slic_seg(img):
+        n_seg = 8000
+        segments_data = slic(img, n_segments=n_seg, compactness=0.1, max_iter=10, sigma=0, convert2lab=False,
+                             slic_zero=False)
+        n_segments = len(np.unique(segments_data))
+
+        # plot results
+        name = 'slic_n{n}'.format(n=n_seg)
+        input_seg_plot(segments_data, n_segments, segmentation_path_slic, name)
+        # store segments
+        save_load_segments(None, segments_data, segmentation_path_slic, 'segments_' + name, True)
+
+        return segments_data
+
+    if seg_algo == 'quick':
+        segments = quick_seg(scaled_image)
+    else:
+        segments = slic_seg(scaled_image)
+
+    return segments
+
+
+def create_objects(scaled_image, segments):
     def compute_statistics(s_pixels):
         # Compute statistics for each Band
         # min, max, mean, variance, skewness, kurtosis
@@ -412,37 +375,79 @@ def obia(img_samples, t_dataset):
 
         return attributes
 
-    def create_objects():
-        objects = []
-        object_labels = []
-        for s in n_segments:
-            segments = rescale_img[segmentation == s]
-            # compute statistics for each object
-            objects.append(compute_statistics(segments))
-            # assign a class label to each object
-            object_labels.append(s)
+    object_samples = []
+    object_labels = []
 
-        save_or_load_objects(objects, segmentation_path, 'objects', True)
-        save_or_load_objects(object_labels, segmentation_path, 'object_labels', True)
+    n_segments = np.unique(segments)
+    for s in n_segments:
+        train_segments = scaled_image[segments == s]
+        # compute statistics for each object
+        object_samples.append(compute_statistics(train_segments))
+        # assign a class label to each object
+        object_labels.append(s)
 
-        print("Created %i objects" % len(objects))
+    save_load_objects(None, None, object_samples, segmentation_path, 'objects', True)
+    save_load_objects(None, None, object_labels, segmentation_path, 'object_labels', True)
 
-        return objects, object_labels
+    print("Created %i objects" % len(object_samples))
 
+    return object_samples, object_labels
+
+
+def obia(img_samples, t_dataset):
+    def plot_training_segments():
+
+        def plot(segments_data):
+            # use predefined colours
+            custom_colours = COLOURS
+            colour_map = colors.ListedColormap(custom_colours)
+            plt.imshow(segments_data, cmap=colour_map)
+            # for 4 different features + NoData
+            plt.colorbar(ticks=[0, 1, 2, 3, 4])
+            plt.tight_layout()
+
+            path = os.path.join(segmentation_path, 'train_seg_img' + '.png')
+            if not os.path.exists(validation_path):
+                os.makedirs(validation_path)
+
+            plt.savefig(path)
+            print 'Fig saved in %s' % path
+
+            plt.clf()
+
+        # DELETE BEFORE SUBMITTING AND ONLY USE PICS
+
+        # label non-training segments with 0
+        # create a copy only for plotting purposes
+        seg_img = np.copy(segmentation)
+        # threshold needs to be higher than the max number of segments
+        t = len(n_segments)
+        for l in labels:
+            class_label = t + l
+            # label all segments that match with class label
+            for segment_label in training_segments[l]:
+                seg_img[seg_img == segment_label] = class_label
+
+        # all segments that do no appear in marked training areas are labelled as 0
+        seg_img[seg_img <= t] = 0
+        # rest are marked with class labels, e.g 1-forest, 2-field, etc. by subtracting the threshold value
+        seg_img[seg_img > t] -= t
+
+        # plot training segments
+        plot(seg_img)
+
+    print '\n\nObject-Based Image Analysis\n'
     # segmentation tools work with values between 0 and 1, hence image needs to be rescaled
-    rescale_img = exposure.rescale_intensity(img_samples)
+    scaled_img = exposure.rescale_intensity(img_samples)
 
     # either load existing segments or create new ones
-    load_segments = True
-    seg_algo = 'quick'
     segmentation = None
     if load_segments:
-        segmentation = save_or_load_segments(None, segmentation_path_quickshift, 'segments_quick_k7_d3_r0.35', False)
+        segmentation = save_load_segments(scaled_img, None, segmentation_path_quickshift, 'segments_quick_k7_d3_r0.35',
+                                          False)
     else:
-        if seg_algo == 'quick':
-            segmentation = quick_seg(rescale_img)
-        else:
-            segmentation = slic_seg(rescale_img)
+        segmentation = perform_segmentation(scaled_img)
+
     n_segments = np.unique(segmentation)
     print 'No. of segments: %i' % len(n_segments)
 
@@ -484,19 +489,186 @@ def obia(img_samples, t_dataset):
     training_segments_true = None
 
     # create and plot training segments
-    training_segments_plot()
+    plot_training_segments()
 
     # create objects / training data
-    load_objects = True
     objects = None
     object_labels = None
     if load_objects:
-        objects = save_or_load_objects(objects, segmentation_path, 'objects', False)
-        object_labels = save_or_load_objects(object_labels, segmentation_path, 'object_labels', False)
+        objects = save_load_objects(scaled_img, segmentation, None, segmentation_path, 'objects', False)
+        object_labels = save_load_objects(scaled_img, segmentation, None, segmentation_path, 'object_labels', False)
     else:
-        objects, object_labels = create_objects()
+        objects, object_labels = create_objects(scaled_img, segmentation)
 
-    print 'Done'
+    training_labels = []
+    training_objects = []
+    for l in labels:
+
+        class_objects = []
+        for i, features in enumerate(objects):
+            if object_labels[i] in training_segments[l]:
+                class_objects.append(features)
+
+        # add objects
+        training_objects.extend(class_objects)
+        # generate labels
+        training_labels.extend(l for n in range(len(class_objects)))
+
+        # DELETE PRINT STATEMENT
+        print("Training samples for class %i: %i" % (l, len(class_objects)))
+
+    return training_objects, training_labels, objects, object_labels, segmentation
+
+
+def object_classification(training_dataset, input_image_samples):
+    # OBIA
+    training_samples, training_labels, object_samples, \
+    object_labels, segmentation = obia(input_image_samples, training_dataset)
+
+    # list to ndarray
+    training_labels = np.asarray(training_labels)
+    training_samples = np.asarray(training_samples)
+
+    if cross_validate:
+        cross_validation_object(training_samples, training_labels, object_samples, object_labels, segmentation)
+
+    else:
+        # train the model
+        classifier.fit(training_samples, training_labels)
+        # predict
+        result = classifier.predict(object_samples)
+
+        # back to pixels
+        classify = np.copy(segmentation)
+        for n_segments, l in zip(object_labels, result):
+            classify[classify == n_segments] = l
+
+        # write to file
+        write_geotiff(output_data_path, output_data_name, classify, geo_transform, projection)
+
+
+def pixel_classification(training_dataset, input_image_samples):
+
+    # only consider labelled pixels (e.g. 1=forest, 2=field, 3=grassland, 4=other) .... 0=NoData
+    shapefile_data = np.nonzero(training_dataset)
+    # training_labels - list of class labels such that the i-th position indicates the class for i-th pixel in training_samples
+    # search for shapefile pixels in the training array (returns labels)
+    training_labels = training_dataset[shapefile_data]
+    # training_samples - list of pixels to be used for training, a pixel is a point in the 7-dimensional space of bands
+    # search for shapefile pixels in the input image data array (returns training samples that correspond to the labels returned from training array)
+    training_samples = input_image_samples[shapefile_data]
+
+    if cross_validate:
+        cross_validation_pixel(training_samples, training_labels)
+
+    else:
+        # train the model
+        classifier.fit(training_samples, training_labels)
+        # total number of samples or pixels in an image (1000*1000)
+
+        tot_samples = rows * cols
+        # reshape for classification input - needs to be array of pixels
+        flat_pixels = input_image_samples.reshape((tot_samples, number_of_bands))
+        result = classifier.predict(flat_pixels)
+        # reshape back into image form
+        classify = result.reshape((rows, cols))
+
+        # write to file
+        write_geotiff(output_data_path, output_data_name, classify, geo_transform, projection)
+
+
+def cross_validation_object(training_samples, training_labels, object_samples, object_labels, segmentation):
+    # K-fold cross validation - splits in kfv_splits equal chunks
+    kf = KFold(n_splits=kfv_splits)
+
+    cvs = cross_val_score(classifier, training_samples, training_labels, cv=kf, n_jobs=-1, pre_dispatch='2*n_jobs')
+    print '\nCross val score: {}'.format(cvs)
+
+    class_acc = []
+    iteration = 0
+    output_data_name = 'c_out_f{f}_{c}_{n}_i{i}.tiff'.format(f=features_comb, c=class_s, n=no_estimators, i=iteration)
+
+    for train, test in kf.split(training_samples):
+        iteration += 1
+
+        head, tail = output_data_name.split('.')
+        output_data_name = head[:-1] + str(iteration) + '.' + tail
+
+        # split training dataset to training and testing samples
+        X_train, X_test, y_train, y_test = training_samples[train], training_samples[test], training_labels[train], \
+                                           training_labels[test]
+
+        # train the model
+        classifier.fit(X_train, y_train)
+        # predict
+        result = classifier.predict(object_samples)
+
+        # back to pixels
+        classify = np.copy(segmentation)
+        for n_segments, l in zip(object_labels, result):
+            classify[classify == n_segments] = l
+
+        # write to file
+        write_geotiff(output_data_path, output_data_name, classify, geo_transform, projection)
+
+        # evaluation
+        validation(classifier, X_test, y_test, class_acc)
+
+    # write cross validation scores
+    write_s = []
+    for i in range(kfv_splits):
+        write_s.append('{0:10f} {1:10f}'.format(cvs[i], class_acc[i]))
+        print write_s[i]
+
+    write_scores(write_s, '\nCross Validation Scores / Classification Accuracy Scores\n', accuracy_score_name)
+
+
+def cross_validation_pixel(training_samples, training_labels):
+    # K-fold cross validation - splits in kfv_splits equal chunks
+    kf = KFold(n_splits=kfv_splits)
+
+    cvs = cross_val_score(classifier, training_samples, training_labels, cv=kf, n_jobs=-1, pre_dispatch='2*n_jobs')
+    print '\nCross val score: {}'.format(cvs)
+
+    iteration = 0
+    output_data_name = 'c_out_f{f}_{c}_{n}_i{i}.tiff'.format(f=features_comb, c=class_s, n=no_estimators, i=iteration)
+    class_acc = []
+
+    for train, test in kf.split(training_samples):
+        iteration += 1
+
+        head, tail = output_data_name.split('.')
+        output_data_name = head[:-1] + str(iteration) + '.' + tail
+
+        X_train, X_test, y_train, y_test = training_samples[train], training_samples[test], training_labels[train], \
+                                           training_labels[test]
+
+        # train the model
+        classifier.fit(X_train, y_train)
+
+        # total number of samples or pixels in an image (1000*1000)
+        tot_samples = rows * cols
+        # reshape for classification input - needs to be array of pixels
+        flat_pixels = input_image_samples.reshape((tot_samples, number_of_bands))
+
+        # predict
+        result = classifier.predict(flat_pixels)
+        # reshape back into image form
+        classify = result.reshape((rows, cols))
+
+        # write to file
+        write_geotiff(output_data_path, output_data_name, classify, geo_transform, projection)
+
+        # evaluation
+        validation(classifier, X_test, y_test, class_acc)
+
+    # write cross validation scores
+    write_s = []
+    for i in range(kfv_splits):
+        write_s.append('{0:10f} {1:10f}'.format(cvs[i], class_acc[i]))
+        print write_s[i]
+
+    write_scores(write_s, '\nCross Validation Scores / Classification Accuracy Scores\n', accuracy_score_name)
 
 
 if __name__ == "__main__":
@@ -513,23 +685,8 @@ if __name__ == "__main__":
 
     # training attributes
     training_dataset = import_training_data(training_data_path, training_data_name)
-    # only consider labelled pixels (e.g. 1=forest, 2=field, 3=grassland, 4=other) .... 0=NoData
-    shapefile_data = np.nonzero(training_dataset)
 
-    # training_labels - list of class labels such that the i-th position indicates the class for i-th pixel in training_samples
-    # search for shapefile pixels in the training array (returns labels)
-    training_labels = training_dataset[shapefile_data]
-    # training_samples - list of pixels to be used for training, a pixel is a point in the 7-dimensional space of bands
-    # search for shapefile pixels in the input image data array (returns training samples that correspond to the labels returned from training array)
-    training_samples = input_image_samples[shapefile_data]
-
-    # count samples and return weights of each of the classes
-    weights = count_samples(training_labels)
-
-    ### OBIA
-    obia(input_image_samples, training_dataset)
-
-    ### TRAINING
+    # classifiers
     rf = RandomForestClassifier(n_estimators=no_estimators, criterion='gini', bootstrap=True, max_features='auto',
                                 n_jobs=-1, verbose=True, oob_score=True, class_weight='balanced')
 
@@ -544,48 +701,13 @@ if __name__ == "__main__":
         output_data_path = output_data_path_knn
     output_data_name = 'c_out_f{f}_{c}_{n}_i{i}.tiff'.format(f=features_comb, c=class_s, n=no_estimators, i=iteration)
 
-    # K-fold cross validation - splits in 10 equal chunks (16056/10 = 1606)
-    kf = KFold(n_splits=kfv_splits)
-    cvs = cross_val_score(classifier, training_samples, training_labels, cv=kf, n_jobs=-1, pre_dispatch='2*n_jobs')
-    print '\nCross val score: {}'.format(cvs)
+    print '\nClassification starting\n'
+    # object-based image analysis
+    if do_obia:
+        object_classification(training_dataset, input_image_samples)
 
-    print '\nTraining...'
-    class_acc = []
-    for train, test in kf.split(training_samples):
-        iteration += 1
-
-        head, tail = output_data_name.split('.')
-        output_data_name = head[:-1] + str(iteration) + '.' + tail
-
-        X_train, X_test, y_train, y_test = training_samples[train], training_samples[test], training_labels[train], \
-                                           training_labels[test]
-
-        classifier.fit(X_train, y_train)
-        # rf.fit(training_samples, training_labels)
-
-        ### PREDICTING
-        print '\nPredicting...'
-
-        # total number of samples or pixels in an image (1000*1000)
-        tot_samples = rows * cols
-        # reshape for classification input - needs to be array of pixels
-        flat_pixels = input_image_samples.reshape((tot_samples, number_of_bands))
-        result = classifier.predict(flat_pixels)
-        # reshape back into image form
-        classify = result.reshape((rows, cols))
-
-        # WRITING TO FILE
-        write_geotiff(output_data_path, output_data_name, classify, geo_transform, projection)
-
-        # EVALUATING
-        validation(classifier, X_test, y_test)
-
-    # write cross validation scores
-    write_s = []
-    for i in range(kfv_splits):
-        write_s.append('{0:10f} {1:10f}'.format(cvs[i], class_acc[i]))
-        print write_s[i]
-
-    write_scores(write_s, '\nCross Validation Scores / Classification Accuracy Scores\n', accuracy_score_name)
+    # pixel-based image analysis
+    else:
+        pixel_classification(training_dataset, input_image_samples)
 
     print '\nDONE'
