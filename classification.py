@@ -1,6 +1,8 @@
 import cPickle as pickle
 import os
+import re
 
+import easygui as e
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy as sp
@@ -17,60 +19,18 @@ from sklearn.neighbors import KNeighborsClassifier
 
 COLOURS = ['#FFFFFF', '#F6C5AF', '#5AAA95', '#9A031E', '#000000']
 
-# Parameters
-classifier = None
-class_s = 'knn'  # for naming purposes
-load_segments = True
-load_objects = True
-seg_algo = 'quick'
-do_obia = False
-cross_validate = True
-iteration = 0
 
-no_trees = 100
-no_neighbours = 10
-no_estimators = no_trees if class_s == 'rf' else no_neighbours
-features_comb = 3
-kfv_splits = 2
-
-# Folder paths
-OUTPUT_PATH = ''
-
-image_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\input_file'
-training_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\training_data'
-output_data_path = r'C:\Users\Dida\Desktop\Hedgerows Data\ArcMap Data\project_2\output_file'
-output_data_path_rf = os.path.join(output_data_path, 'rf')
-output_data_path_knn = os.path.join(output_data_path, 'knn')
-validation_path = os.path.join(output_data_path, 'validation')
-accuracy_score_path = os.path.join(validation_path, 'scores')
-segmentation_path = os.path.join(output_data_path, 'segmentation')
-segmentation_path_quickshift = os.path.join(segmentation_path, 'quickshift')
-segmentation_path_slic = os.path.join(segmentation_path, 'slic')
-
-# File paths
-input_data_name = 'input_Clip.tif'
-output_data_name = 'c_out_f{f}_{c}_{n}_i{i}.tiff'.format(f=features_comb, c=class_s, n=no_estimators, i=iteration)
-accuracy_score_name = 'accuracy_scores_{c}_{n}.txt'.format(c=class_s, n=no_estimators)
-
-# 'Feature_comb__1,2,3.tif' different areas of training attributes
-# All have 0 set as NoData
-training_data_name = 'Feature_comb{}.tif'.format(features_comb)
-
-
-def import_image_data(folder_name, file_name):
-    print '\nRead input .tif data file and import it as numpy array'
-
+def import_image_data(folder_path):
     # import as read only
-    path = os.path.join(folder_name, file_name)
     try:
-        image_data = gdal.Open(path, GA_ReadOnly)
+        image_data = gdal.Open(folder_path, GA_ReadOnly)
     except RuntimeError:
         print 'Cannot open desired path'
         exit(1)
 
     # get geospatial coordinates
     geo_transform = image_data.GetGeoTransform()
-    # projection reference - display img from a sphere - Earth to flat 2D screen, usually Mercator projection - check ArcMap Img Properties for more info
+    # projection reference - convert Earth sphere img to flat 2D screen, usually Mercator projection
     projection = image_data.GetProjectionRef()
 
     bands = []
@@ -88,20 +48,15 @@ def import_image_data(folder_name, file_name):
     # store number of rows and columns (i.e. img resolution in pixels) and the number of bands (depth)
     rows, cols, number_of_bands = bands.shape  # 1000,1000,7
 
-    # check for pixel depth
-    print 'Input data type: {}'.format(bands.dtype)
     # close dataset
     image_data = None
 
     return bands, rows, cols, number_of_bands, geo_transform, projection
 
 
-def import_training_data(folder_name, file_name):
-    print '\nRead training .tif data file and import it as numpy array'
-
-    path = os.path.join(folder_name, file_name)
+def import_training_data(folder_path):
     try:
-        training_data = gdal.Open(path, GA_ReadOnly)
+        training_data = gdal.Open(folder_path, GA_ReadOnly)
     except RuntimeError:
         print 'Cannot open desired path'
         exit(1)
@@ -111,11 +66,11 @@ def import_training_data(folder_name, file_name):
     # read to memory
     training_array = band.ReadAsArray()
 
+    ### DELETE COMMENTS
     # feature to raster instead of gdal rasterize function
     # could merge all shapefiles into one and then rasterize or could import all raw .shp shapefiles
     # and then add all non zero pixels to same training array
 
-    print 'Training data type: {}'.format(training_array.dtype)
     # close dataset
     training_data = None
 
@@ -125,10 +80,11 @@ def import_training_data(folder_name, file_name):
 
 def write_geotiff(folder_name, file_name, data, geo_transform, projection):
     path = os.path.join(folder_name, file_name)
+    # check if valid path
     if not os.path.exists(folder_name):
         os.makedirs(folder_name)
 
-    print 'Saving as: \'{}\''.format(file_name)
+    print '\nSaving Classification As: \'{}\'\n'.format(file_name)
 
     driver = gdal.GetDriverByName('GTiff')
     rows, cols = data.shape
@@ -153,8 +109,7 @@ def write_geotiff(folder_name, file_name, data, geo_transform, projection):
         r = colour_entry[0]
         g = colour_entry[1]
         b = colour_entry[2]
-        a = 255  # alpha or blackband
-        print colour_entry
+        a = 255  # alpha or black band
         # store in colour table
         colour_table.SetColorEntry(n, (r, g, b, a))
 
@@ -169,6 +124,7 @@ def write_geotiff(folder_name, file_name, data, geo_transform, projection):
 
 def write_scores(data, name, file_name):
     path = os.path.join(accuracy_score_path, file_name)
+    # check if valid path
     if not os.path.exists(accuracy_score_path):
         os.makedirs(accuracy_score_path)
 
@@ -183,18 +139,19 @@ def write_scores(data, name, file_name):
         f.write('\n')
     f.write('\n')
 
+    print 'Saving Accuracy Report'
     f.close()
 
 
 def validation(classifier, test_samples, test_labels, class_acc):
     class_names = ['Forest', 'Field', 'Grassland', 'Other']
 
+    ### DELETE COMMENT
     # predicts only the test data for comparison against test labels
     predicted_labels = classifier.predict(test_samples)
 
     confusion_matrix = metrics.confusion_matrix(test_labels, predicted_labels)
     confusion_matrix_str = "Confusion matrix:\n\n{}\n".format(confusion_matrix)
-    print confusion_matrix_str
 
     classification_report = "Classification report:\n\n{}".format(
         metrics.classification_report(test_labels, predicted_labels, target_names=class_names))
@@ -215,7 +172,7 @@ def validation(classifier, test_samples, test_labels, class_acc):
 
 def plot_confusion_matrix(class_names, conf_matrix):
     plt_colour = plt.cm.BuPu  # blue purpleish
-    plt_title = 'Confusion Matrix {c}_{n}_i{i}'.format(c=class_s, n=no_estimators, i=iteration)
+    plt_title = 'Confusion Matrix {c}_{n}_i{i}'.format(c=classifier_s, n=no_estimators, i=iteration)
     plt_tick_marks = np.arange(len(class_names))
 
     plt.imshow(conf_matrix, interpolation='nearest', cmap=plt_colour)
@@ -236,6 +193,7 @@ def plot_confusion_matrix(class_names, conf_matrix):
     plt.tight_layout()
 
     path = os.path.join(validation_path, plt_title + '.png')
+    # check if valid path
     if not os.path.exists(validation_path):
         os.makedirs(validation_path)
 
@@ -243,8 +201,8 @@ def plot_confusion_matrix(class_names, conf_matrix):
     plt.clf()
 
 
-def save_load_segments(img, seg_result, folder_path, file_name, write):
-    path = os.path.join(folder_path, file_name + '.pkl')
+def save_load_segments(img, seg_result, folder_path, file_path, write):
+    # check if valid path
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
@@ -252,46 +210,46 @@ def save_load_segments(img, seg_result, folder_path, file_name, write):
     seg_file = np.ndarray(shape=(1000, 1000), dtype=int)
     if write:
         # write results to a file
-        with open(path, 'wb') as file_out:
+        with open(file_path, 'wb') as file_out:
             pickle.dump(seg_result, file_out, -1)
-        print '\nFile saved at: ', path
+        print '\nFile saved at: ', file_path
     else:
         # check if the result exists
-        if not os.path.isfile(path):
+        if not os.path.isfile(file_path):
             # run the segmentation if it does not
             seg_file = perform_segmentation(img)
             return seg_file
 
         # read and return results from a file
-        with open(path, 'rb') as file_in:
+        with open(file_path, 'rb') as file_in:
             seg_file = pickle.load(file_in)
-        print '\nFile loaded'
+        print '\nSegmentation file loaded'
 
     return seg_file
 
 
-def save_load_objects(img, segments, obj, folder_path, file_name, write):
-    path = os.path.join(folder_path, file_name + '.pkl')
+def save_load_objects(img, segments, obj, folder_path, file_path, write):
+    # check if valid path
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
     objects_file = None
     if write:
         # write results to a file
-        with open(path, 'wb') as file_out:
+        with open(file_path, 'wb') as file_out:
             pickle.dump(obj, file_out, -1)
-        print '\nFile saved at: ', path
+        print '\nFile saved at: ', file_path
     else:
         # check if the result exists
-        if not os.path.isfile(path):
+        if not os.path.isfile(file_path):
             # create objects if it does not
             objects_file = create_objects(img, segments)
             return objects_file[1]  # returns only object samples
 
         # read and return results from a file
-        with open(path, 'rb') as file_in:
+        with open(file_path, 'rb') as file_in:
             objects_file = pickle.load(file_in)
-        print '\nFile loaded'
+        print '\nObjects file loaded'
 
     return objects_file
 
@@ -305,6 +263,7 @@ def perform_segmentation(scaled_image):
         plt.tight_layout()
 
         path = os.path.join(file_path, 'plots', plt_title + '.png')
+        # check if valid path
         if not os.path.exists(file_path):
             os.makedirs(file_path)
 
@@ -314,35 +273,40 @@ def perform_segmentation(scaled_image):
         plt.clf()
 
     def quick_seg(img):
+        # params
         k_size = 7
         max_d = 2
         ratio = 0.35
+
         segments_data = quickshift(img, kernel_size=k_size, max_dist=max_d, ratio=ratio, convert2lab=False)
         n_segments = len(np.unique(segments_data))
 
         # plot results
         name = 'quick_k{k}_d{d}_r{r}'.format(k=k_size, d=max_d, r=ratio)
-        input_seg_plot(segments_data, n_segments, segmentation_path_quickshift, name)
+        input_seg_plot(segments_data, n_segments, path_quickshift, name)
         # store segments
-        save_load_segments(None, segments_data, segmentation_path_quickshift, 'segments_' + name, True)
+        file_path = os.path.join(path_quickshift, 'segments_' + name + '.pkl')
+        save_load_segments(None, segments_data, path_quickshift, file_path, True)
 
         return segments_data
 
     def slic_seg(img):
-        n_seg = 8000
+        # param
+        n_seg = 10000
         segments_data = slic(img, n_segments=n_seg, compactness=0.1, max_iter=10, sigma=0, convert2lab=False,
                              slic_zero=False)
         n_segments = len(np.unique(segments_data))
 
         # plot results
         name = 'slic_n{n}'.format(n=n_seg)
-        input_seg_plot(segments_data, n_segments, segmentation_path_slic, name)
+        input_seg_plot(segments_data, n_segments, path_slic, name)
         # store segments
-        save_load_segments(None, segments_data, segmentation_path_slic, 'segments_' + name, True)
+        file_path = os.path.join(path_slic, 'segments_' + name + '.pkl')
+        save_load_segments(None, segments_data, path_slic, file_path, True)
 
         return segments_data
 
-    if seg_algo == 'quick':
+    if seg_algo == 'quickshift':
         segments = quick_seg(scaled_image)
     else:
         segments = slic_seg(scaled_image)
@@ -386,10 +350,12 @@ def create_objects(scaled_image, segments):
         # assign a class label to each object
         object_labels.append(s)
 
-    save_load_objects(None, None, object_samples, segmentation_path, 'objects', True)
-    save_load_objects(None, None, object_labels, segmentation_path, 'object_labels', True)
+    file_path_o = os.path.join(segmentation_path, 'objects' + '.pkl')
+    file_path_l = os.path.join(segmentation_path, 'object_labels' + '.pkl')
+    save_load_objects(None, None, object_samples, segmentation_path, file_path_o, True)
+    save_load_objects(None, None, object_labels, segmentation_path, file_path_l, True)
 
-    print("Created %i objects" % len(object_samples))
+    print("Created %d objects" % len(object_samples))
 
     return object_samples, object_labels
 
@@ -406,7 +372,8 @@ def obia(img_samples, t_dataset):
             plt.colorbar(ticks=[0, 1, 2, 3, 4])
             plt.tight_layout()
 
-            path = os.path.join(segmentation_path, 'train_seg_img' + '.png')
+            path = os.path.join(segmentation_path, 'train_segments' + '.png')
+            # check if valid path
             if not os.path.exists(validation_path):
                 os.makedirs(validation_path)
 
@@ -436,24 +403,19 @@ def obia(img_samples, t_dataset):
         # plot training segments
         plot(seg_img)
 
-    print '\n\nObject-Based Image Analysis\n'
     # segmentation tools work with values between 0 and 1, hence image needs to be rescaled
     scaled_img = exposure.rescale_intensity(img_samples)
 
     # either load existing segments or create new ones
     segmentation = None
     if load_segments:
-        segmentation = save_load_segments(scaled_img, None, segmentation_path_quickshift, 'segments_quick_k7_d3_r0.35',
-                                          False)
+        segmentation = save_load_segments(scaled_img, None, segmentation_path, segments_path, False)
     else:
         segmentation = perform_segmentation(scaled_img)
 
     n_segments = np.unique(segmentation)
-    print 'No. of segments: %i' % len(n_segments)
-
     # no of class labels of training data, 0 is marked as NoData
     labels = np.unique(t_dataset)[1:]
-    print 'No. of class labels: %i' % len(labels)
 
     # check which segments are in shapefile areas
     training_segments = {}
@@ -462,8 +424,6 @@ def obia(img_samples, t_dataset):
         class_segments = segmentation[t_dataset == l]
         # set builds unordered collection of unique objects - no duplication
         training_segments[l] = set(class_segments)
-        ### BEFORE SUBMIT DETELE PRINT STATEMENT
-        print("Segments in class %i: %i" % (l, len(training_segments[l])))
 
     # check if segments contain training pixels of different classes
     # |= is set union that updates the set instead of returning a new one == update()
@@ -479,8 +439,6 @@ def obia(img_samples, t_dataset):
     i = 1
     for class_segments in training_segments.values():
         training_segments_true[i] = class_segments - intersect
-        print 'Training_true: ', len(training_segments_true[i])
-        print 'Diff: ', (len(class_segments) - len(training_segments_true[i]))
         i += 1
 
     # assign back to the old name
@@ -495,8 +453,10 @@ def obia(img_samples, t_dataset):
     objects = None
     object_labels = None
     if load_objects:
-        objects = save_load_objects(scaled_img, segmentation, None, segmentation_path, 'objects', False)
-        object_labels = save_load_objects(scaled_img, segmentation, None, segmentation_path, 'object_labels', False)
+        file_path_o = os.path.join(objects_path, 'objects' + '.pkl')
+        file_path_l = os.path.join(objects_path, 'object_labels' + '.pkl')
+        objects = save_load_objects(scaled_img, segmentation, None, segmentation_path, file_path_o, False)
+        object_labels = save_load_objects(scaled_img, segmentation, None, segmentation_path, file_path_l, False)
     else:
         objects, object_labels = create_objects(scaled_img, segmentation)
 
@@ -513,9 +473,6 @@ def obia(img_samples, t_dataset):
         training_objects.extend(class_objects)
         # generate labels
         training_labels.extend(l for n in range(len(class_objects)))
-
-        # DELETE PRINT STATEMENT
-        print("Training samples for class %i: %i" % (l, len(class_objects)))
 
     return training_objects, training_labels, objects, object_labels, segmentation
 
@@ -582,11 +539,11 @@ def cross_validation_object(training_samples, training_labels, object_samples, o
     kf = KFold(n_splits=kfv_splits)
 
     cvs = cross_val_score(classifier, training_samples, training_labels, cv=kf, n_jobs=-1, pre_dispatch='2*n_jobs')
-    print '\nCross val score: {}'.format(cvs)
+    print '\nBuilt-in Cross Validation Score:\n{}\n'.format(cvs)
 
     class_acc = []
     iteration = 0
-    output_data_name = 'c_out_f{f}_{c}_{n}_i{i}.tiff'.format(f=features_comb, c=class_s, n=no_estimators, i=iteration)
+    output_data_name = 'classified_{c}_{n}_i{i}.tiff'.format(c=classifier_s, n=no_estimators, i=iteration)
 
     for train, test in kf.split(training_samples):
         iteration += 1
@@ -614,7 +571,7 @@ def cross_validation_object(training_samples, training_labels, object_samples, o
         # evaluation
         validation(classifier, X_test, y_test, class_acc)
 
-    # write cross validation scores
+    # write cross-validation scores
     write_s = []
     for i in range(kfv_splits):
         write_s.append('{0:10f} {1:10f}'.format(cvs[i], class_acc[i]))
@@ -628,11 +585,11 @@ def cross_validation_pixel(training_samples, training_labels):
     kf = KFold(n_splits=kfv_splits)
 
     cvs = cross_val_score(classifier, training_samples, training_labels, cv=kf, n_jobs=-1, pre_dispatch='2*n_jobs')
-    print '\nCross val score: {}'.format(cvs)
+    print '\nBuilt-in Cross Validation Score:\n{}\n'.format(cvs)
 
-    iteration = 0
-    output_data_name = 'c_out_f{f}_{c}_{n}_i{i}.tiff'.format(f=features_comb, c=class_s, n=no_estimators, i=iteration)
     class_acc = []
+    iteration = 0
+    output_data_name = 'classified_{c}_{n}_i{i}.tiff'.format(c=classifier_s, n=no_estimators, i=iteration)
 
     for train, test in kf.split(training_samples):
         iteration += 1
@@ -662,18 +619,78 @@ def cross_validation_pixel(training_samples, training_labels):
         # evaluation
         validation(classifier, X_test, y_test, class_acc)
 
-    # write cross validation scores
+    # write cross-validation scores
     write_s = []
     for i in range(kfv_splits):
         write_s.append('{0:10f} {1:10f}'.format(cvs[i], class_acc[i]))
-        print write_s[i]
 
     write_scores(write_s, '\nCross Validation Scores / Classification Accuracy Scores\n', accuracy_score_name)
 
 
+def collect_params():
+    # PATHS
+    global image_data_path, training_data_path, output_data_path
+
+    print '\nSelect Input Image File'
+    image_data_path = e.fileopenbox(msg="Select File", title="Import Input Image File",
+                                    filetypes=("tiff files", "*.tif"), multiple=False)
+    print '\nSelect Training Data File'
+    training_data_path = e.fileopenbox(msg="Select File", title="Import Training Data File",
+                                       filetypes=("tiff files", "*.tif"), multiple=False)
+    print '\nSelect Output Folder'
+    output_data_path = e.diropenbox(title="Select Output Folder")
+
+    global path_rf, path_knn, validation_path, accuracy_score_path, segmentation_path, path_quickshift, path_slic
+    path_rf = os.path.join(output_data_path, 'rf')
+    path_knn = os.path.join(output_data_path, 'knn')
+    validation_path = os.path.join(output_data_path, 'validation')
+    accuracy_score_path = os.path.join(validation_path, 'scores')
+    segmentation_path = os.path.join(output_data_path, 'segmentation')
+    path_quickshift = os.path.join(segmentation_path, 'quickshift')
+    path_slic = os.path.join(segmentation_path, 'slic')
+
+    # PARAMS
+    global classifier_s, no_estimators, do_obia, load_segments, load_objects, seg_algo, cross_validate, kfv_splits, iteration
+
+    # CONFIG
+    print '\nClassification Configuration'
+    conf_txt = "Set Classification Configuration"
+    conf_title = "Classification Configuration"
+    conf_fields = ['Classifier', 'Number Of Estimators', 'Image Analysis Type', 'Segmentation Algorithm',
+                   'Load Segments', 'Load Objects', 'Cross-Validation', 'k-splits']
+    conf_values = ['random-forests / knn', '100 for RF / 10 for KNN', 'object-based / pixel-based', 'quickshift / slic',
+                   'True / False', 'True / False', 'True / False', '10']
+    config = e.multenterbox(msg=conf_txt, title=conf_title, fields=conf_fields, values=conf_values)
+
+    # DEFAULTS
+    classifier_s = config[0] if (config[0] == 'random-forests' or config[0] == 'knn') else 'random-forests'
+    no_estimators = int(config[1]) if re.match('^[0-9]{1,4}$', config[1]) else (
+    10 if config[0] == 'knn' else 100)  # is number
+    do_obia = True if config[2] == 'object-based' else False
+    seg_algo = config[3] if (config[3] == 'quickshift' or config[3] == 'slic') else 'quickshift'
+    load_segments = True if config[4] == 'True' else False  # is file
+    load_objects = True if config[5] == 'True' else False  # is folder
+    cross_validate = True if config[6] == 'True' else False
+    kfv_splits = int(config[7]) if re.match('^[0-9]{1,2}$', config[7]) else 10
+    iteration = 0
+
+    global segments_path, objects_path
+    if load_objects:
+        objects_path = e.diropenbox(title="Select Folder With Segmentation Objects")
+    if load_segments:
+        segments_path = e.fileopenbox(msg="Select File", title="Import Segmentation File", multiple=False)
+
+    # OUTPUT
+    global output_data_name, accuracy_score_name
+    output_data_name = 'classified_{c}_{n}_i{i}.tiff'.format(c=classifier_s, n=no_estimators, i=iteration)
+    accuracy_score_name = 'accuracy_scores_{c}_{n}.txt'.format(c=classifier_s, n=no_estimators)
+
+
 if __name__ == "__main__":
 
-    image_dataset = import_image_data(image_data_path, input_data_name)
+    collect_params()
+
+    image_dataset = import_image_data(image_data_path)
 
     # image attributes
     input_image_samples = image_dataset[0]
@@ -684,30 +701,31 @@ if __name__ == "__main__":
     projection = image_dataset[5]
 
     # training attributes
-    training_dataset = import_training_data(training_data_path, training_data_name)
+    training_dataset = import_training_data(training_data_path)
 
     # classifiers
     rf = RandomForestClassifier(n_estimators=no_estimators, criterion='gini', bootstrap=True, max_features='auto',
-                                n_jobs=-1, verbose=True, oob_score=True, class_weight='balanced')
+                                n_jobs=-1, verbose=False, oob_score=True, class_weight='balanced')
 
     knn = KNeighborsClassifier(n_neighbors=no_estimators, weights='distance', algorithm='auto', metric='minkowski',
                                n_jobs=-1)
 
-    if class_s == 'rf':
+    if classifier_s == 'random-forests':
         classifier = rf
-        output_data_path = output_data_path_rf
+        output_data_path = path_rf
     else:
         classifier = knn
-        output_data_path = output_data_path_knn
-    output_data_name = 'c_out_f{f}_{c}_{n}_i{i}.tiff'.format(f=features_comb, c=class_s, n=no_estimators, i=iteration)
+        output_data_path = path_knn
 
-    print '\nClassification starting\n'
-    # object-based image analysis
+    print '\nObject-Based Classification Starting\n'
+
     if do_obia:
+        print '\nObject-Based Classification Starting\n'
         object_classification(training_dataset, input_image_samples)
 
     # pixel-based image analysis
     else:
+        print '\nPixel-Based Classification Starting\n'
         pixel_classification(training_dataset, input_image_samples)
 
     print '\nDONE'
