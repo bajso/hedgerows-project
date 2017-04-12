@@ -14,11 +14,10 @@ from skimage.segmentation import quickshift, slic
 from sklearn import metrics
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import KFold
-from sklearn.model_selection import cross_val_score
 from sklearn.neighbors import KNeighborsClassifier
 
 COLOURS = ['#FFFFFF', '#F6C5AF', '#5AAA95', '#9A031E', '#000000']
-
+iteration = 0
 
 def import_image_data(folder_path):
     # import as read only
@@ -122,7 +121,8 @@ def write_geotiff(folder_name, file_name, data, geo_transform, projection):
     output_data = None
 
 
-def write_scores(data, name, file_name):
+def write_scores(data, iteration, file_name):
+    name = 'Iteration: {}\n'.format(iteration)
     path = os.path.join(accuracy_score_path, file_name)
     # check if valid path
     if not os.path.exists(accuracy_score_path):
@@ -143,11 +143,9 @@ def write_scores(data, name, file_name):
     f.close()
 
 
-def validation(classifier, test_samples, test_labels, class_acc):
+def validation(classifier, test_samples, test_labels, iteration):
     class_names = ['Forest', 'Field', 'Grassland', 'Other']
 
-    ### DELETE COMMENT
-    # predicts only the test data for comparison against test labels
     predicted_labels = classifier.predict(test_samples)
 
     confusion_matrix = metrics.confusion_matrix(test_labels, predicted_labels)
@@ -163,14 +161,13 @@ def validation(classifier, test_samples, test_labels, class_acc):
 
     # write report
     data = [confusion_matrix_str, classification_report, classification_accuracy_str]
-    class_acc.append(classification_accuracy)
 
-    write_scores(data, 'Iteration: {}\n'.format(iteration), accuracy_score_name)
+    write_scores(data, iteration, accuracy_score_name)
 
-    plot_confusion_matrix(class_names, confusion_matrix)
+    plot_confusion_matrix(class_names, confusion_matrix, iteration)
 
 
-def plot_confusion_matrix(class_names, conf_matrix):
+def plot_confusion_matrix(class_names, conf_matrix, iteration):
     plt_colour = plt.cm.BuPu  # blue purpleish
     plt_title = 'Confusion Matrix {c}_{n}_i{i}'.format(c=classifier_s, n=no_estimators, i=iteration)
     plt_tick_marks = np.arange(len(class_names))
@@ -538,10 +535,6 @@ def cross_validation_object(training_samples, training_labels, object_samples, o
     # K-fold cross validation - splits in kfv_splits equal chunks
     kf = KFold(n_splits=kfv_splits)
 
-    cvs = cross_val_score(classifier, training_samples, training_labels, cv=kf, n_jobs=-1, pre_dispatch='2*n_jobs')
-    print '\nBuilt-in Cross Validation Score:\n{}\n'.format(cvs)
-
-    class_acc = []
     iteration = 0
     output_data_name = 'classified_{c}_{n}_i{i}.tiff'.format(c=classifier_s, n=no_estimators, i=iteration)
 
@@ -569,25 +562,13 @@ def cross_validation_object(training_samples, training_labels, object_samples, o
         write_geotiff(output_data_path, output_data_name, classify, geo_transform, projection)
 
         # evaluation
-        validation(classifier, X_test, y_test, class_acc)
-
-    # write cross-validation scores
-    write_s = []
-    for i in range(kfv_splits):
-        write_s.append('{0:10f} {1:10f}'.format(cvs[i], class_acc[i]))
-        print write_s[i]
-
-    write_scores(write_s, '\nCross Validation Scores / Classification Accuracy Scores\n', accuracy_score_name)
+        validation(classifier, X_test, y_test, iteration)
 
 
 def cross_validation_pixel(training_samples, training_labels):
     # K-fold cross validation - splits in kfv_splits equal chunks
     kf = KFold(n_splits=kfv_splits)
 
-    cvs = cross_val_score(classifier, training_samples, training_labels, cv=kf, n_jobs=-1, pre_dispatch='2*n_jobs')
-    print '\nBuilt-in Cross Validation Score:\n{}\n'.format(cvs)
-
-    class_acc = []
     iteration = 0
     output_data_name = 'classified_{c}_{n}_i{i}.tiff'.format(c=classifier_s, n=no_estimators, i=iteration)
 
@@ -617,14 +598,7 @@ def cross_validation_pixel(training_samples, training_labels):
         write_geotiff(output_data_path, output_data_name, classify, geo_transform, projection)
 
         # evaluation
-        validation(classifier, X_test, y_test, class_acc)
-
-    # write cross-validation scores
-    write_s = []
-    for i in range(kfv_splits):
-        write_s.append('{0:10f} {1:10f}'.format(cvs[i], class_acc[i]))
-
-    write_scores(write_s, '\nCross Validation Scores / Classification Accuracy Scores\n', accuracy_score_name)
+        validation(classifier, X_test, y_test, iteration)
 
 
 def collect_params():
@@ -716,8 +690,6 @@ if __name__ == "__main__":
     else:
         classifier = knn
         output_data_path = path_knn
-
-    print '\nObject-Based Classification Starting\n'
 
     if do_obia:
         print '\nObject-Based Classification Starting\n'
