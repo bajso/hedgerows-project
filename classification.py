@@ -2,11 +2,11 @@ import cPickle as pickle
 import os
 import re
 
-import easygui as e
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy as sp
-from gdalconst import *
+import scipy.stats as scistat
+from easygui import fileopenbox, diropenbox, multenterbox
+from gdalconst import GA_ReadOnly
 from matplotlib import colors
 from osgeo import gdal
 from skimage import exposure
@@ -19,35 +19,34 @@ from sklearn.neighbors import KNeighborsClassifier
 COLOURS = ['#FFFFFF', '#F6C5AF', '#5AAA95', '#9A031E', '#000000']
 iteration = 0
 
+
 def import_image_data(folder_path):
-    # import as read only
+    # Import as read only
     try:
         image_data = gdal.Open(folder_path, GA_ReadOnly)
     except RuntimeError:
         print 'Cannot open desired path'
         exit(1)
 
-    # get geospatial coordinates
+    # Get geospatial coordinates
     geo_transform = image_data.GetGeoTransform()
-    # projection reference - convert Earth sphere img to flat 2D screen, usually Mercator projection
+    # Projection reference - conversion from spherical Earth image to flat 2D screen (e.g. Mercator projection)
     projection = image_data.GetProjectionRef()
 
     bands = []
-    # import and stack all bands of input satellite image
-    # bands from 1 - 7
+    # Import and stack all bands of input satellite image
     # RasterCount returns number of bands
     for b in range(1, image_data.RasterCount + 1):
-        # gets a band
         band = image_data.GetRasterBand(b)
-        # reads band to memory
+        # Read band to memory
         bands.append(band.ReadAsArray())
 
-    # stack array in depth, along third axis
+    # Stack array in depth, along third axis
     bands = np.dstack(bands)
-    # store number of rows and columns (i.e. img resolution in pixels) and the number of bands (depth)
-    rows, cols, number_of_bands = bands.shape  # 1000,1000,7
+    # Store the number of rows and columns (i.e. img resolution in pixels) and the number of bands (depth)
+    rows, cols, number_of_bands = bands.shape
 
-    # close dataset
+    # Close dataset
     image_data = None
 
     return bands, rows, cols, number_of_bands, geo_transform, projection
@@ -60,26 +59,20 @@ def import_training_data(folder_path):
         print 'Cannot open desired path'
         exit(1)
 
-    # shapefiles are constructed of a single band
+    # Shapefiles are constructed of a single band
     band = training_data.GetRasterBand(1)
-    # read to memory
+    # Read to memory
     training_array = band.ReadAsArray()
 
-    ### DELETE COMMENTS
-    # feature to raster instead of gdal rasterize function
-    # could merge all shapefiles into one and then rasterize or could import all raw .shp shapefiles
-    # and then add all non zero pixels to same training array
-
-    # close dataset
+    # Close dataset
     training_data = None
 
-    # Training data is ~990x951 pixel array, 8 bit colour depth
     return training_array
 
 
 def write_geotiff(folder_name, file_name, data, geo_transform, projection):
     path = os.path.join(folder_name, file_name)
-    # check if valid path
+    # Check if path is valid
     if not os.path.exists(folder_name):
         os.makedirs(folder_name)
 
@@ -87,34 +80,32 @@ def write_geotiff(folder_name, file_name, data, geo_transform, projection):
 
     driver = gdal.GetDriverByName('GTiff')
     rows, cols = data.shape
-    # create an image of type unit8
-    # output is only 1 band
+    # Create an image of type unit8
+    # Output is only 1 band
     output_data = driver.Create(path, cols, rows, 1, gdal.GDT_Byte)
     output_data.SetGeoTransform(geo_transform)
     output_data.SetProjection(projection)
     band = output_data.GetRasterBand(1)
 
-    # list of colours
     custom_colours = COLOURS
-    # create a colour table
+    # Create new colour table
     colour_table = gdal.ColorTable()
-    # add colours to the table
-    # start from the second colour on the list, first is plain white
+    # Add colours to the table
     for n in range(1, len(custom_colours)):
-        # convert from hex to rgb values
+        # Convert from hex to rgb values
         colour_entry = colors.hex2color(custom_colours[n])
-        # convert to 0-255 colour range
+        # Convert to 0-255 colour range
         colour_entry = [int(255 * x) for x in colour_entry]
         r = colour_entry[0]
         g = colour_entry[1]
         b = colour_entry[2]
-        a = 255  # alpha or black band
-        # store in colour table
+        a = 255  # Alpha or black band
+        # Store in colour table
         colour_table.SetColorEntry(n, (r, g, b, a))
 
     band.SetColorTable(colour_table)
 
-    # write the image
+    # Write the image
     band.WriteArray(data)
 
     # Close the file
@@ -124,14 +115,14 @@ def write_geotiff(folder_name, file_name, data, geo_transform, projection):
 def write_scores(data, iteration, file_name):
     name = 'Iteration: {}\n'.format(iteration)
     path = os.path.join(accuracy_score_path, file_name)
-    # check if valid path
+    # Check if path is valid
     if not os.path.exists(accuracy_score_path):
         os.makedirs(accuracy_score_path)
 
     if os.path.isfile(path) and iteration > 1:
-        f = open(path, 'a+')  # appends in the end
+        f = open(path, 'a+')  # Appends in the end
     else:
-        f = open(path, 'w+')  # creates the file
+        f = open(path, 'w+')  # Creates the file
 
     f.write(name + '\n')
     for s in data:
@@ -159,7 +150,7 @@ def validation(classifier, test_samples, test_labels, iteration):
     classification_accuracy_str = "Classification accuracy: {}".format(classification_accuracy)
     print classification_accuracy_str
 
-    # write report
+    # Write report
     data = [confusion_matrix_str, classification_report, classification_accuracy_str]
 
     write_scores(data, iteration, accuracy_score_name)
@@ -168,13 +159,13 @@ def validation(classifier, test_samples, test_labels, iteration):
 
 
 def plot_confusion_matrix(class_names, conf_matrix, iteration):
-    plt_colour = plt.cm.BuPu  # blue purpleish
+    plt_colour = plt.cm.BuPu  # Blue-purpleish
     plt_title = 'Confusion Matrix {c}_{n}_i{i}'.format(c=classifier_s, n=no_estimators, i=iteration)
     plt_tick_marks = np.arange(len(class_names))
 
     plt.imshow(conf_matrix, interpolation='nearest', cmap=plt_colour)
 
-    # sample annotation
+    # Cell annotation
     for x in xrange(len(class_names)):
         for y in xrange(len(class_names)):
             plt.annotate(str(conf_matrix[x][y]), xy=(y, x), ha='center', va='center')
@@ -183,14 +174,14 @@ def plot_confusion_matrix(class_names, conf_matrix, iteration):
     plt.colorbar()
     plt.xlabel('Predicted samples')
     plt.ylabel('True samples')
-    # custom labels
+    # Custom labels
     plt.xticks(plt_tick_marks, class_names, rotation=45)
     plt.yticks(plt_tick_marks, class_names)
-    # fit to figure
+    # Fit to figure
     plt.tight_layout()
 
     path = os.path.join(validation_path, plt_title + '.png')
-    # check if valid path
+    # Check if path is valid
     if not os.path.exists(validation_path):
         os.makedirs(validation_path)
 
@@ -199,25 +190,25 @@ def plot_confusion_matrix(class_names, conf_matrix, iteration):
 
 
 def save_load_segments(img, seg_result, folder_path, file_path, write):
-    # check if valid path
+    # Check if path is valid
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
-    # creates empty ndarray of type int
+    # Create empty ndarray of type int
     seg_file = np.ndarray(shape=(1000, 1000), dtype=int)
     if write:
-        # write results to a file
+        # Write results to a file
         with open(file_path, 'wb') as file_out:
             pickle.dump(seg_result, file_out, -1)
         print '\nFile saved at: ', file_path
     else:
-        # check if the result exists
+        # Check if the result exists
         if not os.path.isfile(file_path):
-            # run the segmentation if it does not
+            # Run the segmentation if it does not
             seg_file = perform_segmentation(img)
             return seg_file
 
-        # read and return results from a file
+        # Read and return results from a file
         with open(file_path, 'rb') as file_in:
             seg_file = pickle.load(file_in)
         print '\nSegmentation file loaded'
@@ -226,24 +217,25 @@ def save_load_segments(img, seg_result, folder_path, file_path, write):
 
 
 def save_load_objects(img, segments, obj, folder_path, file_path, write):
-    # check if valid path
+    # Check if path is valid
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
     objects_file = None
     if write:
-        # write results to a file
+        # Write results to a file
         with open(file_path, 'wb') as file_out:
             pickle.dump(obj, file_out, -1)
         print '\nFile saved at: ', file_path
     else:
-        # check if the result exists
+        # Check if the result exists
         if not os.path.isfile(file_path):
-            # create objects if it does not
+            # Create objects if it does not
             objects_file = create_objects(img, segments)
-            return objects_file[1]  # returns only object samples
+            # Returns only object samples, instead of tuple (samples, labels)
+            return objects_file[1]
 
-        # read and return results from a file
+        # Read and return results from a file
         with open(file_path, 'rb') as file_in:
             objects_file = pickle.load(file_in)
         print '\nObjects file loaded'
@@ -253,16 +245,17 @@ def save_load_objects(img, segments, obj, folder_path, file_path, write):
 
 def perform_segmentation(scaled_image):
     def input_seg_plot(img, n_seg, file_path, plt_title):
-        # create random colours for all segments
+        # Create random colours for all segments
         plt_colours = colors.ListedColormap(np.random.rand(n_seg, 3))
         plt.imshow(img, cmap=plt_colours, interpolation='none')
-        # to fit properly with all labels
+        # Fit to figure
         plt.tight_layout()
 
-        path = os.path.join(file_path, 'plots', plt_title + '.png')
-        # check if valid path
-        if not os.path.exists(file_path):
-            os.makedirs(file_path)
+        plot_path = os.path.join(file_path, 'plots')
+        path = os.path.join(plot_path, plt_title + '.png')
+        # Check if path is valid
+        if not os.path.exists(plot_path):
+            os.makedirs(plot_path)
 
         plt.savefig(path)
         print 'Fig saved in %s' % path
@@ -270,34 +263,34 @@ def perform_segmentation(scaled_image):
         plt.clf()
 
     def quick_seg(img):
-        # params
+        # Params
         k_size = 7
-        max_d = 2
+        max_d = 3
         ratio = 0.35
 
         segments_data = quickshift(img, kernel_size=k_size, max_dist=max_d, ratio=ratio, convert2lab=False)
         n_segments = len(np.unique(segments_data))
 
-        # plot results
+        # Plot results
         name = 'quick_k{k}_d{d}_r{r}'.format(k=k_size, d=max_d, r=ratio)
         input_seg_plot(segments_data, n_segments, path_quickshift, name)
-        # store segments
+        # Store segments
         file_path = os.path.join(path_quickshift, 'segments_' + name + '.pkl')
         save_load_segments(None, segments_data, path_quickshift, file_path, True)
 
         return segments_data
 
     def slic_seg(img):
-        # param
+        # Params
         n_seg = 10000
         segments_data = slic(img, n_segments=n_seg, compactness=0.1, max_iter=10, sigma=0, convert2lab=False,
                              slic_zero=False)
         n_segments = len(np.unique(segments_data))
 
-        # plot results
+        # Plot results
         name = 'slic_n{n}'.format(n=n_seg)
         input_seg_plot(segments_data, n_segments, path_slic, name)
-        # store segments
+        # Store segments
         file_path = os.path.join(path_slic, 'segments_' + name + '.pkl')
         save_load_segments(None, segments_data, path_slic, file_path, True)
 
@@ -314,21 +307,21 @@ def perform_segmentation(scaled_image):
 def create_objects(scaled_image, segments):
     def compute_statistics(s_pixels):
         # Compute statistics for each Band
-        # min, max, mean, variance, skewness, kurtosis
+        # Statistics: min, max, mean, variance, skewness, kurtosis
         attributes = []
         number_of_pixels, number_of_bands = s_pixels.shape
 
         for band in range(number_of_bands):
-            statistics = sp.stats.describe(s_pixels[:, band])
-            # min and max is a tuple
+            statistics = scistat.describe(s_pixels[:, band])
+            # Min and max is a tuple
             b_stats = list(statistics[1])
-            # add them all together
+            # Add them all together
             b_stats += list(statistics[2:])
-            # check if any attribute is NaN due to division with neg values
+            # Check if any attribute is NaN due to division with neg values
             i = 0
             for s in b_stats:
                 if np.isnan(s):
-                    # replace with zero
+                    # Replace with zero
                     b_stats[i] = float(0)
                 i += 1
 
@@ -342,9 +335,9 @@ def create_objects(scaled_image, segments):
     n_segments = np.unique(segments)
     for s in n_segments:
         train_segments = scaled_image[segments == s]
-        # compute statistics for each object
+        # Compute statistics for each object
         object_samples.append(compute_statistics(train_segments))
-        # assign a class label to each object
+        # Assign a class label to each object
         object_labels.append(s)
 
     file_path_o = os.path.join(segmentation_path, 'objects' + '.pkl')
@@ -361,16 +354,15 @@ def obia(img_samples, t_dataset):
     def plot_training_segments():
 
         def plot(segments_data):
-            # use predefined colours
             custom_colours = COLOURS
             colour_map = colors.ListedColormap(custom_colours)
             plt.imshow(segments_data, cmap=colour_map)
-            # for 4 different features + NoData
+            # 4 different features + NoData
             plt.colorbar(ticks=[0, 1, 2, 3, 4])
             plt.tight_layout()
 
             path = os.path.join(segmentation_path, 'train_segments' + '.png')
-            # check if valid path
+            # Check if path is valid
             if not os.path.exists(validation_path):
                 os.makedirs(validation_path)
 
@@ -379,7 +371,9 @@ def obia(img_samples, t_dataset):
 
             plt.clf()
 
+        #
         # DELETE BEFORE SUBMITTING AND ONLY USE PICS
+        #
 
         # label non-training segments with 0
         # create a copy only for plotting purposes
@@ -400,10 +394,10 @@ def obia(img_samples, t_dataset):
         # plot training segments
         plot(seg_img)
 
-    # segmentation tools work with values between 0 and 1, hence image needs to be rescaled
+    # Segmentation work with values between 0 and 1, hence image needs to be rescaled
     scaled_img = exposure.rescale_intensity(img_samples)
 
-    # either load existing segments or create new ones
+    # Either load existing segments or create new ones
     segmentation = None
     if load_segments:
         segmentation = save_load_segments(scaled_img, None, segmentation_path, segments_path, False)
@@ -411,42 +405,42 @@ def obia(img_samples, t_dataset):
         segmentation = perform_segmentation(scaled_img)
 
     n_segments = np.unique(segmentation)
-    # no of class labels of training data, 0 is marked as NoData
+    # No. of class labels of training data, 0 is marked as NoData
     labels = np.unique(t_dataset)[1:]
 
-    # check which segments are in shapefile areas
+    # Check which segments are in shapefile areas
     training_segments = {}
     for l in labels:
-        # part of the same class if training labels and segment labels match
+        # Part of the same class if training labels and segment labels match
         class_segments = segmentation[t_dataset == l]
-        # set builds unordered collection of unique objects - no duplication
+        # Set builds unordered collection of unique objects - no duplication
         training_segments[l] = set(class_segments)
 
-    # check if segments contain training pixels of different classes
+    # Check if segments contain training pixels of different classes
     # |= is set union that updates the set instead of returning a new one == update()
     segments_union = set()
     intersect = set()
     training_segments_true = {}
     for class_segments in training_segments.values():
-        # for all segments with same label check if any intersect with different labels
+        # For all segments with same label check if any intersect with different labels
         intersect.update(segments_union.intersection(class_segments))
         segments_union.update(class_segments)
 
-    # if they do, remove them from training segments array
+    # If they do, remove them from training segments array
     i = 1
     for class_segments in training_segments.values():
         training_segments_true[i] = class_segments - intersect
         i += 1
 
-    # assign back to the old name
+    # Assign back to the old name
     training_segments = None
     training_segments = training_segments_true
     training_segments_true = None
 
-    # create and plot training segments
+    # Create and plot training segments
     plot_training_segments()
 
-    # create objects / training data
+    # Create objects / training data
     objects = None
     object_labels = None
     if load_objects:
@@ -466,20 +460,18 @@ def obia(img_samples, t_dataset):
             if object_labels[i] in training_segments[l]:
                 class_objects.append(features)
 
-        # add objects
         training_objects.extend(class_objects)
-        # generate labels
+        # Generate labels
         training_labels.extend(l for n in range(len(class_objects)))
 
     return training_objects, training_labels, objects, object_labels, segmentation
 
 
 def object_classification(training_dataset, input_image_samples):
-    # OBIA
-    training_samples, training_labels, object_samples, \
-    object_labels, segmentation = obia(input_image_samples, training_dataset)
+    training_samples, training_labels, object_samples, object_labels, segmentation = obia(input_image_samples,
+                                                                                          training_dataset)
 
-    # list to ndarray
+    # List to ndarray
     training_labels = np.asarray(training_labels)
     training_samples = np.asarray(training_samples)
 
@@ -487,25 +479,26 @@ def object_classification(training_dataset, input_image_samples):
         cross_validation_object(training_samples, training_labels, object_samples, object_labels, segmentation)
 
     else:
-        # train the model
+        # Train the model
         classifier.fit(training_samples, training_labels)
-        # predict
+        # Predict
         result = classifier.predict(object_samples)
 
-        # back to pixels
+        # Convert back to pixels
         classify = np.copy(segmentation)
         for n_segments, l in zip(object_labels, result):
             classify[classify == n_segments] = l
 
-        # write to file
+        # Write to file
         write_geotiff(output_data_path, output_data_name, classify, geo_transform, projection)
 
 
 def pixel_classification(training_dataset, input_image_samples):
+    ### DELETE COMMNETS
 
-    # only consider labelled pixels (e.g. 1=forest, 2=field, 3=grassland, 4=other) .... 0=NoData
+    # Only consider labelled pixels (e.g. 1=forest, 2=field, 3=grassland, 4=other) .... 0=NoData
     shapefile_data = np.nonzero(training_dataset)
-    # training_labels - list of class labels such that the i-th position indicates the class for i-th pixel in training_samples
+    # Training_labels - list of class labels such that the i-th position indicates the class for i-th pixel in training_samples
     # search for shapefile pixels in the training array (returns labels)
     training_labels = training_dataset[shapefile_data]
     # training_samples - list of pixels to be used for training, a pixel is a point in the 7-dimensional space of bands
@@ -516,18 +509,17 @@ def pixel_classification(training_dataset, input_image_samples):
         cross_validation_pixel(training_samples, training_labels)
 
     else:
-        # train the model
+        # Train the model
         classifier.fit(training_samples, training_labels)
-        # total number of samples or pixels in an image (1000*1000)
 
         tot_samples = rows * cols
-        # reshape for classification input - needs to be array of pixels
+        # Reshape for classification input - needs to be array of pixels
         flat_pixels = input_image_samples.reshape((tot_samples, number_of_bands))
         result = classifier.predict(flat_pixels)
-        # reshape back into image form
+        # Reshape back into image form
         classify = result.reshape((rows, cols))
 
-        # write to file
+        # Write to file
         write_geotiff(output_data_path, output_data_name, classify, geo_transform, projection)
 
 
@@ -544,24 +536,24 @@ def cross_validation_object(training_samples, training_labels, object_samples, o
         head, tail = output_data_name.split('.')
         output_data_name = head[:-1] + str(iteration) + '.' + tail
 
-        # split training dataset to training and testing samples
+        # Split training dataset to training and testing samples
         X_train, X_test, y_train, y_test = training_samples[train], training_samples[test], training_labels[train], \
                                            training_labels[test]
 
-        # train the model
+        # Train the model
         classifier.fit(X_train, y_train)
-        # predict
+        # Predict
         result = classifier.predict(object_samples)
 
-        # back to pixels
+        # Convert back to pixels
         classify = np.copy(segmentation)
         for n_segments, l in zip(object_labels, result):
             classify[classify == n_segments] = l
 
-        # write to file
+        # Write to file
         write_geotiff(output_data_path, output_data_name, classify, geo_transform, projection)
 
-        # evaluation
+        # Evaluation
         validation(classifier, X_test, y_test, iteration)
 
 
@@ -581,23 +573,22 @@ def cross_validation_pixel(training_samples, training_labels):
         X_train, X_test, y_train, y_test = training_samples[train], training_samples[test], training_labels[train], \
                                            training_labels[test]
 
-        # train the model
+        # Train the model
         classifier.fit(X_train, y_train)
 
-        # total number of samples or pixels in an image (1000*1000)
         tot_samples = rows * cols
-        # reshape for classification input - needs to be array of pixels
+        # Reshape for classification input - needs to be array of pixels
         flat_pixels = input_image_samples.reshape((tot_samples, number_of_bands))
 
-        # predict
+        # Predict
         result = classifier.predict(flat_pixels)
-        # reshape back into image form
+        # Reshape back into image form
         classify = result.reshape((rows, cols))
 
-        # write to file
+        # Write to file
         write_geotiff(output_data_path, output_data_name, classify, geo_transform, projection)
 
-        # evaluation
+        # Evaluation
         validation(classifier, X_test, y_test, iteration)
 
 
@@ -606,13 +597,13 @@ def collect_params():
     global image_data_path, training_data_path, output_data_path
 
     print '\nSelect Input Image File'
-    image_data_path = e.fileopenbox(msg="Select File", title="Import Input Image File",
-                                    filetypes=("tiff files", "*.tif"), multiple=False)
+    image_data_path = fileopenbox(msg="Select File", title="Import Input Image File",
+                                  filetypes=("tiff files", "*.tif"), multiple=False)
     print '\nSelect Training Data File'
-    training_data_path = e.fileopenbox(msg="Select File", title="Import Training Data File",
-                                       filetypes=("tiff files", "*.tif"), multiple=False)
+    training_data_path = fileopenbox(msg="Select File", title="Import Training Data File",
+                                     filetypes=("tiff files", "*.tif"), multiple=False)
     print '\nSelect Output Folder'
-    output_data_path = e.diropenbox(title="Select Output Folder")
+    output_data_path = diropenbox(title="Select Output Folder")
 
     global path_rf, path_knn, validation_path, accuracy_score_path, segmentation_path, path_quickshift, path_slic
     path_rf = os.path.join(output_data_path, 'rf')
@@ -631,15 +622,15 @@ def collect_params():
     conf_txt = "Set Classification Configuration"
     conf_title = "Classification Configuration"
     conf_fields = ['Classifier', 'Number Of Estimators', 'Image Analysis Type', 'Segmentation Algorithm',
-                   'Load Segments', 'Load Objects', 'Cross-Validation', 'k-splits']
+                   'pickle.load Segments', 'pickle.load Objects', 'Cross-Validation', 'k-splits']
     conf_values = ['random-forests / knn', '100 for RF / 10 for KNN', 'object-based / pixel-based', 'quickshift / slic',
                    'True / False', 'True / False', 'True / False', '10']
-    config = e.multenterbox(msg=conf_txt, title=conf_title, fields=conf_fields, values=conf_values)
+    config = multenterbox(msg=conf_txt, title=conf_title, fields=conf_fields, values=conf_values)
 
     # DEFAULTS
     classifier_s = config[0] if (config[0] == 'random-forests' or config[0] == 'knn') else 'random-forests'
     no_estimators = int(config[1]) if re.match('^[0-9]{1,4}$', config[1]) else (
-    10 if config[0] == 'knn' else 100)  # is number
+        10 if config[0] == 'knn' else 100)  # is number
     do_obia = True if config[2] == 'object-based' else False
     seg_algo = config[3] if (config[3] == 'quickshift' or config[3] == 'slic') else 'quickshift'
     load_segments = True if config[4] == 'True' else False  # is file
@@ -650,9 +641,9 @@ def collect_params():
 
     global segments_path, objects_path
     if load_objects:
-        objects_path = e.diropenbox(title="Select Folder With Segmentation Objects")
+        objects_path = diropenbox(title="Select Folder With Segmentation Objects")
     if load_segments:
-        segments_path = e.fileopenbox(msg="Select File", title="Import Segmentation File", multiple=False)
+        segments_path = fileopenbox(msg="Select File", title="Import Segmentation File", multiple=False)
 
     # OUTPUT
     global output_data_name, accuracy_score_name
@@ -666,7 +657,7 @@ if __name__ == "__main__":
 
     image_dataset = import_image_data(image_data_path)
 
-    # image attributes
+    # Image attributes
     input_image_samples = image_dataset[0]
     rows = image_dataset[1]
     cols = image_dataset[2]
@@ -674,10 +665,10 @@ if __name__ == "__main__":
     geo_transform = image_dataset[4]
     projection = image_dataset[5]
 
-    # training attributes
+    # Training image attributes
     training_dataset = import_training_data(training_data_path)
 
-    # classifiers
+    # Classifiers
     rf = RandomForestClassifier(n_estimators=no_estimators, criterion='gini', bootstrap=True, max_features='auto',
                                 n_jobs=-1, verbose=False, oob_score=True, class_weight='balanced')
 
@@ -694,8 +685,6 @@ if __name__ == "__main__":
     if do_obia:
         print '\nObject-Based Classification Starting\n'
         object_classification(training_dataset, input_image_samples)
-
-    # pixel-based image analysis
     else:
         print '\nPixel-Based Classification Starting\n'
         pixel_classification(training_dataset, input_image_samples)
