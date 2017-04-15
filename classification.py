@@ -25,7 +25,7 @@ def import_image_data(folder_path):
     try:
         image_data = gdal.Open(folder_path, GA_ReadOnly)
     except RuntimeError:
-        print 'Cannot open desired path'
+        print 'Cannot open input image path'
         exit(1)
 
     # Get geospatial coordinates
@@ -56,7 +56,7 @@ def import_training_data(folder_path):
     try:
         training_data = gdal.Open(folder_path, GA_ReadOnly)
     except RuntimeError:
-        print 'Cannot open desired path'
+        print 'Cannot open training data path'
         exit(1)
 
     # Shapefiles are constructed of a single band
@@ -399,9 +399,10 @@ def obia(img_samples, t_dataset):
 
     # Either load existing segments or create new ones
     segmentation = None
-    if load_segments:
+    if load_segments and segments_path is not None:
         segmentation = save_load_segments(scaled_img, None, segmentation_path, segments_path, False)
     else:
+        print '\nCould not find the segments path. Starting default image segmentation.'
         segmentation = perform_segmentation(scaled_img)
 
     n_segments = np.unique(segmentation)
@@ -443,12 +444,13 @@ def obia(img_samples, t_dataset):
     # Create objects / training data
     objects = None
     object_labels = None
-    if load_objects:
+    if load_objects and objects_path is not None:
         file_path_o = os.path.join(objects_path, 'objects' + '.pkl')
         file_path_l = os.path.join(objects_path, 'object_labels' + '.pkl')
         objects = save_load_objects(scaled_img, segmentation, None, segmentation_path, file_path_o, False)
         object_labels = save_load_objects(scaled_img, segmentation, None, segmentation_path, file_path_l, False)
     else:
+        print '\nCould not find the objects path. Starting default image segmentation.'
         objects, object_labels = create_objects(scaled_img, segmentation)
 
     training_labels = []
@@ -599,11 +601,22 @@ def collect_params():
     print '\nSelect Input Image File'
     image_data_path = fileopenbox(msg="Select File", title="Import Input Image File",
                                   filetypes=("tiff files", "*.tif"), multiple=False)
+    if image_data_path is None:
+        print 'No input image path specified.'
+        exit(1)
+
     print '\nSelect Training Data File'
     training_data_path = fileopenbox(msg="Select File", title="Import Training Data File",
                                      filetypes=("tiff files", "*.tif"), multiple=False)
+    if training_data_path is None:
+        print 'No training data path specified.'
+        exit(1)
+
     print '\nSelect Output Folder'
     output_data_path = diropenbox(title="Select Output Folder")
+    if output_data_path is None:
+        print 'No output path specified.'
+        exit(1)
 
     global path_rf, path_knn, validation_path, accuracy_score_path, segmentation_path, path_quickshift, path_slic
     path_rf = os.path.join(output_data_path, 'rf')
@@ -627,16 +640,22 @@ def collect_params():
                    'True / False', 'True / False', 'True / False', '10']
     config = multenterbox(msg=conf_txt, title=conf_title, fields=conf_fields, values=conf_values)
 
+    if config is None:
+        config = []
+        for i in range(8):
+            config.append('0')
+        print 'Running with default configurations.'
+
     # DEFAULTS
     classifier_s = config[0] if (config[0] == 'random-forests' or config[0] == 'knn') else 'random-forests'
-    no_estimators = int(config[1]) if re.match('^[0-9]{1,4}$', config[1]) else (
+    no_estimators = int(config[1]) if re.match('^[1-9][\d]{1,2}$', config[1]) else (
         10 if config[0] == 'knn' else 100)  # is number
     do_obia = True if config[2] == 'object-based' else False
     seg_algo = config[3] if (config[3] == 'quickshift' or config[3] == 'slic') else 'quickshift'
     load_segments = True if config[4] == 'True' else False  # is file
     load_objects = True if config[5] == 'True' else False  # is folder
     cross_validate = True if config[6] == 'True' else False
-    kfv_splits = int(config[7]) if re.match('^[0-9]{1,2}$', config[7]) else 10
+    kfv_splits = int(config[7]) if re.match('^([2-9]|[1-9][\d])$', config[7]) else 10
     iteration = 0
 
     global segments_path, objects_path
