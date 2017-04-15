@@ -38,7 +38,6 @@ def import_image_data(folder_path):
     # RasterCount returns number of bands
     for b in range(1, image_data.RasterCount + 1):
         band = image_data.GetRasterBand(b)
-        # Read band to memory
         bands.append(band.ReadAsArray())
 
     # Stack array in depth, along third axis
@@ -61,7 +60,6 @@ def import_training_data(folder_path):
 
     # Shapefiles are constructed of a single band
     band = training_data.GetRasterBand(1)
-    # Read to memory
     training_array = band.ReadAsArray()
 
     # Close dataset
@@ -282,7 +280,7 @@ def perform_segmentation(scaled_image):
 
     def slic_seg(img):
         # Params
-        n_seg = 10000
+        n_seg = 8000
         segments_data = slic(img, n_segments=n_seg, compactness=0.1, max_iter=10, sigma=0, convert2lab=False,
                              slic_zero=False)
         n_segments = len(np.unique(segments_data))
@@ -351,49 +349,6 @@ def create_objects(scaled_image, segments):
 
 
 def obia(img_samples, t_dataset):
-    def plot_training_segments():
-
-        def plot(segments_data):
-            custom_colours = COLOURS
-            colour_map = colors.ListedColormap(custom_colours)
-            plt.imshow(segments_data, cmap=colour_map)
-            # 4 different features + NoData
-            plt.colorbar(ticks=[0, 1, 2, 3, 4])
-            plt.tight_layout()
-
-            path = os.path.join(segmentation_path, 'train_segments' + '.png')
-            # Check if path is valid
-            if not os.path.exists(validation_path):
-                os.makedirs(validation_path)
-
-            plt.savefig(path)
-            print 'Fig saved in %s' % path
-
-            plt.clf()
-
-        #
-        # DELETE BEFORE SUBMITTING AND ONLY USE PICS
-        #
-
-        # label non-training segments with 0
-        # create a copy only for plotting purposes
-        seg_img = np.copy(segmentation)
-        # threshold needs to be higher than the max number of segments
-        t = len(n_segments)
-        for l in labels:
-            class_label = t + l
-            # label all segments that match with class label
-            for segment_label in training_segments[l]:
-                seg_img[seg_img == segment_label] = class_label
-
-        # all segments that do no appear in marked training areas are labelled as 0
-        seg_img[seg_img <= t] = 0
-        # rest are marked with class labels, e.g 1-forest, 2-field, etc. by subtracting the threshold value
-        seg_img[seg_img > t] -= t
-
-        # plot training segments
-        plot(seg_img)
-
     # Segmentation work with values between 0 and 1, hence image needs to be rescaled
     scaled_img = exposure.rescale_intensity(img_samples)
 
@@ -402,7 +357,7 @@ def obia(img_samples, t_dataset):
     if load_segments and segments_path is not None:
         segmentation = save_load_segments(scaled_img, None, segmentation_path, segments_path, False)
     else:
-        print '\nCould not find the segments path. Starting default image segmentation.'
+        print '\nSegments path not specified. Starting default image segmentation.'
         segmentation = perform_segmentation(scaled_img)
 
     n_segments = np.unique(segmentation)
@@ -418,12 +373,11 @@ def obia(img_samples, t_dataset):
         training_segments[l] = set(class_segments)
 
     # Check if segments contain training pixels of different classes
-    # |= is set union that updates the set instead of returning a new one == update()
     segments_union = set()
     intersect = set()
     training_segments_true = {}
     for class_segments in training_segments.values():
-        # For all segments with same label check if any intersect with different labels
+        # For all segments with the same label check if any intersect segments with different labels
         intersect.update(segments_union.intersection(class_segments))
         segments_union.update(class_segments)
 
@@ -438,9 +392,6 @@ def obia(img_samples, t_dataset):
     training_segments = training_segments_true
     training_segments_true = None
 
-    # Create and plot training segments
-    plot_training_segments()
-
     # Create objects / training data
     objects = None
     object_labels = None
@@ -450,7 +401,7 @@ def obia(img_samples, t_dataset):
         objects = save_load_objects(scaled_img, segmentation, None, segmentation_path, file_path_o, False)
         object_labels = save_load_objects(scaled_img, segmentation, None, segmentation_path, file_path_l, False)
     else:
-        print '\nCould not find the objects path. Starting default image segmentation.'
+        print '\nObjects path not specified. Starting default image segmentation.'
         objects, object_labels = create_objects(scaled_img, segmentation)
 
     training_labels = []
@@ -481,6 +432,7 @@ def object_classification(training_dataset, input_image_samples):
         cross_validation_object(training_samples, training_labels, object_samples, object_labels, segmentation)
 
     else:
+        print 'Classifying ...'
         # Train the model
         classifier.fit(training_samples, training_labels)
         # Predict
@@ -496,26 +448,23 @@ def object_classification(training_dataset, input_image_samples):
 
 
 def pixel_classification(training_dataset, input_image_samples):
-    ### DELETE COMMNETS
-
-    # Only consider labelled pixels (e.g. 1=forest, 2=field, 3=grassland, 4=other) .... 0=NoData
+    # Only consider labelled pixels (e.g. 1=forest, 2=field, 3=grassland, 4=other) ... 0=NoData
     shapefile_data = np.nonzero(training_dataset)
-    # Training_labels - list of class labels such that the i-th position indicates the class for i-th pixel in training_samples
-    # search for shapefile pixels in the training array (returns labels)
+    # Search for shapefile pixels in the training data (returns labels)
     training_labels = training_dataset[shapefile_data]
-    # training_samples - list of pixels to be used for training, a pixel is a point in the 7-dimensional space of bands
-    # search for shapefile pixels in the input image data array (returns training samples that correspond to the labels returned from training array)
+    # Search for shapefile pixels in the input image data (returns samples that correspond to the labels above)
     training_samples = input_image_samples[shapefile_data]
 
     if cross_validate:
         cross_validation_pixel(training_samples, training_labels)
 
     else:
+        print 'Classifying ...'
         # Train the model
         classifier.fit(training_samples, training_labels)
 
         tot_samples = rows * cols
-        # Reshape for classification input - needs to be array of pixels
+        # Reshape for classification input - needs to be an array of pixels
         flat_pixels = input_image_samples.reshape((tot_samples, number_of_bands))
         result = classifier.predict(flat_pixels)
         # Reshape back into image form
@@ -534,14 +483,16 @@ def cross_validation_object(training_samples, training_labels, object_samples, o
 
     for train, test in kf.split(training_samples):
         iteration += 1
+        print '\nIteration: {}'.format(iteration)
 
         head, tail = output_data_name.split('.')
         output_data_name = head[:-1] + str(iteration) + '.' + tail
 
-        # Split training dataset to training and testing samples
+        # Split training dataset into training and testing samples
         X_train, X_test, y_train, y_test = training_samples[train], training_samples[test], training_labels[train], \
                                            training_labels[test]
 
+        print 'Classifying ...'
         # Train the model
         classifier.fit(X_train, y_train)
         # Predict
@@ -568,6 +519,7 @@ def cross_validation_pixel(training_samples, training_labels):
 
     for train, test in kf.split(training_samples):
         iteration += 1
+        print '\nIteration: {}'.format(iteration)
 
         head, tail = output_data_name.split('.')
         output_data_name = head[:-1] + str(iteration) + '.' + tail
@@ -575,11 +527,12 @@ def cross_validation_pixel(training_samples, training_labels):
         X_train, X_test, y_train, y_test = training_samples[train], training_samples[test], training_labels[train], \
                                            training_labels[test]
 
+        print 'Classifying ...'
         # Train the model
         classifier.fit(X_train, y_train)
 
         tot_samples = rows * cols
-        # Reshape for classification input - needs to be array of pixels
+        # Reshape for classification input - needs to be an array of pixels
         flat_pixels = input_image_samples.reshape((tot_samples, number_of_bands))
 
         # Predict
@@ -635,7 +588,7 @@ def collect_params():
     conf_txt = "Set Classification Configuration"
     conf_title = "Classification Configuration"
     conf_fields = ['Classifier', 'Number Of Estimators', 'Image Analysis Type', 'Segmentation Algorithm',
-                   'pickle.load Segments', 'pickle.load Objects', 'Cross-Validation', 'k-splits']
+                   'Load Segments', 'Load Objects', 'Cross-Validation', 'k-splits']
     conf_values = ['random-forests / knn', '100 for RF / 10 for KNN', 'object-based / pixel-based', 'quickshift / slic',
                    'True / False', 'True / False', 'True / False', '10']
     config = multenterbox(msg=conf_txt, title=conf_title, fields=conf_fields, values=conf_values)
@@ -674,9 +627,8 @@ if __name__ == "__main__":
 
     collect_params()
 
+    # Input image attributes
     image_dataset = import_image_data(image_data_path)
-
-    # Image attributes
     input_image_samples = image_dataset[0]
     rows = image_dataset[1]
     cols = image_dataset[2]
