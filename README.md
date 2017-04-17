@@ -5,28 +5,26 @@ Mapping Hedgerows Using Machine Learning
 How to use the classification.py script
 
 
-classification.py is a simple image classification script supporting object-based and pixel-based approach. The user can choose between RandomForests and k-Nearest Neighbours classification algorithms. Furthermore, if a user chooses the object-based approach it can specify which segmentation algorithm to use.
+The main file, classification.py, is a simple image classification script supporting both object-based and pixel-based approaches. The user can choose between RandomForests and k-Nearest Neighbours classification algorithms. Furthermore, if an object-based approach is chosen, a user can specify which segmentation algorithm to use. There is also an option for k-fold cross-validation.
 
+As the classification.py script relies heavily on the external libraries, the created executable file exceeded the 10MB size constraint. A classification.py script and a list of dependencies were submitted instead.
 
-Running the Script
-
-As classification.py script relies heavily on external libraries, the created executable file exceeded the 10MB size constraint.
-A classification.py script and a list of dependencies were submitted instead.
-
-To run the classification.py script, python and dependencies from the ‘hedgerows-req’ file need to be installed. As there may be some problems using the default package installer pip to install ‘gdal’ and ‘libgdal’, I suggest to download and install the required libraries with Anaconda scientific platform for python.
+To run the classification.py script, Python and dependencies from the 'hedgerows-req' file need to be installed. As some problems may occur if using the default package installer (pip) to install the 'gdal' and 'libgdal' libraries, I suggest downloading and installing the required packages with the Anaconda scientific platform for python.
 
 Anaconda can be obtained on the following site.
 https://www.continuum.io/downloads
 
 Most of the packages required are already included in the default Anaconda distribution. Additional packages can be installed with a command:
-conda install <package_name>
+conda install package_name
+
+In addition, classification.py script has to be run from the Anaconda prompt.
 
 
 Input Data
 
 The classification.py script works with .tif image file data. Again, the data required exceeded the 10MB size constraint.
 
-It can be downloaded from the following site.
+All required data can be downloaded from the following site:
 https://emckclac-my.sharepoint.com/personal/k1461612_kcl_ac_uk/_layouts/15/guestaccess.aspx?folderid=1be6c536e229d4feaa59dd43e98ffa2d9&authkey=AQWrwEn4eNpubHJf1eHG3fA
 
 The ‘data’ folder contains:
@@ -45,7 +43,7 @@ When the classification script is started, it will prompt the user for the follo
 
 2.	Import Training Data File – Select a .tif image file which serves as the training data
 
-3.	Select Output Folder – Select the location where you wish to store the classification output
+3.	Select Output Folder - the location where you wish to store the classification output (sample 'output' folder has been included in the script directory).
 
 4.	Classification configuration
 a.	Classifier – ‘random-forests’ for RandomForests algorithm, ‘knn’ for k-Nearest Neighbours algorithm [default=random-forests]
