@@ -3,6 +3,9 @@ import os
 import re
 import sys
 
+libs_path = os.path.join(os.getcwd(), 'libs')
+sys.path.append(libs_path)
+
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.stats as scistat
@@ -549,13 +552,6 @@ def cross_validation_pixel(training_samples, training_labels):
 
 
 def collect_params():
-    # LIBRARIES
-    lib_path = diropenbox(title="Select External Libraries Folder")
-    if lib_path is None:
-        print 'Libraries Path must be specified. Closing script...'
-        exit(1)
-    sys.path.append(lib_path)
-
     # PATHS
     global image_data_path, training_data_path, output_data_path
 
